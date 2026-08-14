@@ -15,7 +15,7 @@ from backend.database import Base, engine  # noqa: E402
 
 def init_database() -> None:
     # 确保所有模型被导入，以便 Base.metadata 注册它们。
-    # import backend.models  # noqa: F401  （后续阶段补齐模型后取消注释）
+    import backend.models  # noqa: F401
     Base.metadata.create_all(bind=engine)
     print(f"数据库初始化完成: {engine.url}")
 

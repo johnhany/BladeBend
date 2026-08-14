@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import settings
+from backend.routers import capacity
 
 app = FastAPI(
     title="全国电力数据可视化地图 API",
@@ -20,6 +21,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+app.include_router(capacity.router)
 
 
 @app.get("/health", tags=["meta"])
