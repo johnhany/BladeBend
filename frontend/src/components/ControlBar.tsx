@@ -5,6 +5,7 @@ const TABS: { key: Indicator; label: string }[] = [
   { key: 'capacity', label: '装机量' },
   { key: 'spot', label: '现货电价' },
   { key: 'medium_long', label: '中长期电价' },
+  { key: 'trade', label: '省间交易' },
 ]
 
 /** 顶部指标切换器（装机 / 现货 / 中长期，PRD §3.3.1）。 */

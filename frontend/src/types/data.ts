@@ -67,6 +67,60 @@ export interface PriceHistoryResponse {
   data: PriceHistoryPoint[]
 }
 
+/** 输电通道（data/channels.json，PRD §4.3 格式）。 */
+export interface ChannelPoint {
+  name: string
+  province: string
+  lat: number
+  lng: number
+}
+
+export interface Channel {
+  id: string
+  name: string
+  type: 'DC' | 'AC'
+  voltage_kv: number
+  capacity_mw: number
+  start_point: ChannelPoint
+  end_point: ChannelPoint
+  commissioning_date?: string
+  status: string
+  notes?: string
+}
+
+export interface ChannelsResponse {
+  data: Channel[]
+  total: number
+}
+
+/** 省间交易。 */
+export interface TradeItem {
+  from_province_code: string
+  from_province_name: string
+  to_province_code: string
+  to_province_name: string
+  year: number
+  month: number
+  avg_price_yuan_mwh: number
+  trade_volume_mwh: number
+  channel_id: string | null
+}
+
+export interface TradeResponse {
+  data: TradeItem[]
+  total: number
+}
+
+/** 城市（省会 + 主要负荷中心）。 */
+export interface City {
+  name: string
+  province: string
+  lat: number
+  lng: number
+  /** 最大用电负荷（万kW），用于点位大小映射。 */
+  load: number
+}
+
 /** 电源类型字段键。 */
 export type SourceKey = 'thermal_mw' | 'hydro_mw' | 'wind_mw' | 'pv_mw' | 'nuclear_mw' | 'other_mw'
 

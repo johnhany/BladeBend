@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { adcodeOf, type ProvinceFeature } from '@/types/geo'
+import type { Channel } from '@/types/data'
 
 export interface MousePos {
   x: number
@@ -9,6 +10,8 @@ export interface MousePos {
 interface MapState {
   /** 当前悬停的省份要素。 */
   hovered: ProvinceFeature | null
+  /** 当前悬停的输电通道。 */
+  hoveredChannel: Channel | null
   /** 当前选中的省份要素（单击，展示单省详情）。 */
   selected: ProvinceFeature | null
   /** Ctrl/Cmd+点击多选的省份要素（≥2 时进入对比模式）。 */
@@ -17,6 +20,7 @@ interface MapState {
   mousePos: MousePos
 
   setHovered: (feature: ProvinceFeature | null) => void
+  setHoveredChannel: (channel: Channel | null) => void
   setSelected: (feature: ProvinceFeature | null) => void
   clearSelected: () => void
   toggleMulti: (feature: ProvinceFeature) => void
@@ -26,11 +30,13 @@ interface MapState {
 
 export const useMapStore = create<MapState>((set) => ({
   hovered: null,
+  hoveredChannel: null,
   selected: null,
   multiSelected: [],
   mousePos: { x: 0, y: 0 },
 
   setHovered: (feature) => set({ hovered: feature }),
+  setHoveredChannel: (channel) => set({ hoveredChannel: channel }),
   setSelected: (feature) => set({ selected: feature }),
   clearSelected: () => set({ selected: null }),
   toggleMulti: (feature) =>

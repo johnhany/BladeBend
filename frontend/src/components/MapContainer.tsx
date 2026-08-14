@@ -3,8 +3,11 @@ import { select, zoom, zoomIdentity, type ZoomBehavior } from 'd3'
 import { useChinaGeo } from '@/hooks/useChinaGeo'
 import { useCapacityData } from '@/hooks/useCapacityData'
 import { usePriceData } from '@/hooks/usePriceData'
+import { useChannels } from '@/hooks/useChannels'
+import { useTradeData } from '@/hooks/useTradeData'
 import { useMapStore } from '@/stores/mapStore'
 import { useDataStore } from '@/stores/dataStore'
+import { useUIStore } from '@/stores/uiStore'
 import { adcodeOf, type ProvinceFeature } from '@/types/geo'
 import { createChinaProjection, createGeoPath } from '@/utils/projection'
 import {
@@ -15,12 +18,17 @@ import {
 } from '@/utils/colorScales'
 import type { Indicator } from '@/types/data'
 import { AnomalyLayer, type AnomalyMark } from './AnomalyLayer'
+import { ChannelLayer } from './ChannelLayer'
+import { CityLayer, CITIES } from './CityLayer'
 import { ControlBar } from './ControlBar'
 import { DetailPanel } from './DetailPanel'
+import { LayerToggles } from './LayerToggles'
 import { Legend } from './Legend'
 import { ProvinceLayer } from './ProvinceLayer'
+import { SearchBox } from './SearchBox'
 import { SummaryCard } from './SummaryCard'
 import { SouthChinaSeaInset } from './SouthChinaSeaInset'
+import { TerrainLayer } from './TerrainLayer'
 import { TimeSelector } from './TimeSelector'
 import { Tooltip } from './Tooltip'
 
@@ -40,9 +48,19 @@ export function MapContainer() {
   const indicator = useDataStore((s) => s.indicator)
   const year = useDataStore((s) => s.year)
   const isPrice = indicator === 'spot' || indicator === 'medium_long'
+  const isTrade = indicator === 'trade'
 
   const capacityRes = useCapacityData()
   const priceRes = usePriceData(isPrice ? indicator : null)
+  const channelsRes = useChannels()
+  const tradeRes = useTradeData(isTrade)
+
+  const showCities = useUIStore((s) => s.showCities)
+  const showChannels = useUIStore((s) => s.showChannels)
+  const showRivers = useUIStore((s) => s.showRivers)
+  const setChannelsVisible = useUIStore((s) => s.setChannelsVisible)
+  const highlightChannel = useUIStore((s) => s.highlightChannel)
+  const focus = useUIStore((s) => s.focus)
 
   const setMousePos = useMapStore((s) => s.setMousePos)
   const clearSelected = useMapStore((s) => s.clearSelected)
@@ -53,6 +71,11 @@ export function MapContainer() {
 
   const provinces = geo?.provinces ?? NO_PROVINCES
   const southChinaSea = geo?.southChinaSea ?? null
+  const channels = channelsRes.data ?? []
+  const tradeByChannel = useMemo(
+    () => (tradeRes.data ? tradeRes.data.byChannel : undefined),
+    [tradeRes.data],
+  )
 
   const projection = useMemo(
     () =>
@@ -108,9 +131,10 @@ export function MapContainer() {
     [priceValues, indicator],
   )
 
-  // 当前指标的填色函数
+  // 省填色：装机 viridis / 电价阈值分档 / 省间交易中性底色
   const getFill = useCallback(
     (code: string) => {
+      if (isTrade) return NO_DATA_COLOR
       if (isPrice) {
         const it = priceRes.data?.byAdcode.get(code)
         if (!it) return NO_DATA_COLOR
@@ -120,11 +144,29 @@ export function MapContainer() {
       const it = capacityRes.data?.byAdcode.get(code)
       return it ? capacityScale(it.total_mw) : NO_DATA_COLOR
     },
-    [isPrice, indicator, priceRes.data, capacityRes.data, capacityScale, priceScaleInfo],
+    [isTrade, isPrice, indicator, priceRes.data, capacityRes.data, capacityScale, priceScaleInfo],
   )
 
   // 图例分段
   const legend = useMemo(() => {
+    if (isTrade) {
+      const values = tradeRes.data ? tradeRes.data.list.map((t) => t.avg_price_yuan_mwh) : []
+      const info = makePriceThresholdScale(values, 'spot')
+      const th = info.thresholds
+      const colors = info.colors
+      if (!th.length) {
+        return {
+          label: '通道送电均价（元/MWh）',
+          segments: [{ color: colors[0] ?? NO_DATA_COLOR, label: '—' }],
+        }
+      }
+      const segments = colors.map((color, i) => {
+        if (i === 0) return { color, label: `≤${th[0]}` }
+        if (i === th.length) return { color, label: `>${th[th.length - 1]}` }
+        return { color, label: `${th[i - 1]}–${th[i]}` }
+      })
+      return { label: '通道送电均价（元/MWh）', segments }
+    }
     if (isPrice) {
       const th = priceScaleInfo.thresholds
       const colors = priceScaleInfo.colors
@@ -150,7 +192,7 @@ export function MapContainer() {
       label: '总装机',
       segments: ticks.map((v) => ({ color: capacityScale(v), label: formatPower(v) })),
     }
-  }, [isPrice, indicator, priceScaleInfo, capDomain, capacityScale])
+  }, [isTrade, isPrice, indicator, priceScaleInfo, capDomain, capacityScale, tradeRes.data])
 
   // 电价异常标注（负电价 / 触及限价）
   const anomalyMarks = useMemo<AnomalyMark[]>(() => {
@@ -165,6 +207,7 @@ export function MapContainer() {
     return out
   }, [isPrice, priceRes.data, centroidByAdcode])
 
+  // 缩放平移
   useEffect(() => {
     const svg = svgRef.current
     if (!svg) return
@@ -179,6 +222,58 @@ export function MapContainer() {
       selection.on('.zoom', null)
     }
   }, [])
+
+  // 省间交易视图下自动开启通道图层
+  useEffect(() => {
+    if (isTrade && !showChannels) setChannelsVisible(true)
+  }, [isTrade, showChannels, setChannelsVisible])
+
+  // 搜索定位：缩放平移至目标（省份 bbox / 通道起止 / 城市点）
+  useEffect(() => {
+    if (!focus || !zoomBehaviorRef.current || !svgRef.current) return
+    let box: [[number, number], [number, number]] | null = null
+    if (focus.kind === 'province') {
+      const f = provinces.find((p) => adcodeOf(p) === focus.id)
+      if (f && pathGen) {
+        const b = pathGen.bounds(f)
+        box = [
+          [b[0][0], b[0][1]],
+          [b[1][0], b[1][1]],
+        ]
+      }
+    } else if (focus.kind === 'channel') {
+      const ch = channels.find((c) => c.id === focus.id)
+      if (ch && projection) {
+        const p1 = projection([ch.start_point.lng, ch.start_point.lat])
+        const p2 = projection([ch.end_point.lng, ch.end_point.lat])
+        if (p1 && p2)
+          box = [
+            [Math.min(p1[0], p2[0]), Math.min(p1[1], p2[1])],
+            [Math.max(p1[0], p2[0]), Math.max(p1[1], p2[1])],
+          ]
+      }
+    } else {
+      const c = CITIES.find((x) => x.name === focus.id)
+      if (c && projection) {
+        const p = projection([c.lng, c.lat])
+        if (p)
+          box = [
+            [p[0] - 45, p[1] - 45],
+            [p[0] + 45, p[1] + 45],
+          ]
+      }
+    }
+    if (!box) return
+    const w = Math.max(box[1][0] - box[0][0], 1)
+    const h = Math.max(box[1][1] - box[0][1], 1)
+    const k = Math.max(1, Math.min(8, 0.85 * Math.min(VIEW_WIDTH / w, VIEW_HEIGHT / h)))
+    const cx = (box[0][0] + box[1][0]) / 2
+    const cy = (box[0][1] + box[1][1]) / 2
+    select(svgRef.current).call(
+      zoomBehaviorRef.current.transform,
+      zoomIdentity.translate(VIEW_WIDTH / 2 - k * cx, VIEW_HEIGHT / 2 - k * cy).scale(k),
+    )
+  }, [focus, provinces, channels, pathGen, projection])
 
   const handleResetView = () => {
     if (svgRef.current && zoomBehaviorRef.current) {
@@ -200,19 +295,24 @@ export function MapContainer() {
     )
   }
 
-  const loading = geoLoading || capacityRes.loading || (isPrice && priceRes.loading)
-  const dataError = isPrice ? priceRes.error : capacityRes.error
+  const loading =
+    geoLoading ||
+    capacityRes.loading ||
+    (isPrice && priceRes.loading) ||
+    (isTrade && tradeRes.loading)
+  const dataError = isPrice ? priceRes.error : isTrade ? tradeRes.error : capacityRes.error
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-map-bg">
       {/* 标题 */}
       <div className="pointer-events-none absolute left-5 top-4 z-10">
         <h1 className="text-lg font-semibold text-white">全国电力数据可视化地图</h1>
-        <p className="text-xs text-slate-400">指标：{INDICATOR_LABEL[indicator]} · Phase 3</p>
+        <p className="text-xs text-slate-400">指标：{INDICATOR_LABEL[indicator]} · Phase 4</p>
       </div>
 
-      {/* 指标切换 */}
+      {/* 指标切换 + 搜索 */}
       <ControlBar />
+      <SearchBox provinces={provinces} channels={channels} />
 
       {/* 右上控制：时间 + 重置 */}
       <div className="absolute right-5 top-4 z-10 flex items-center gap-2">
@@ -226,9 +326,9 @@ export function MapContainer() {
         </button>
       </div>
 
-      {dataError && (
+      {(dataError || channelsRes.error) && (
         <div className="absolute left-1/2 top-14 z-10 -translate-x-1/2 rounded-md border border-red-500/40 bg-red-950/70 px-3 py-1 text-xs text-red-300">
-          数据加载失败：{dataError.message}
+          数据加载失败：{(dataError ?? channelsRes.error)?.message}
         </div>
       )}
 
@@ -261,7 +361,17 @@ export function MapContainer() {
 
         <g ref={zoomGRef}>
           <ProvinceLayer features={provinces} pathDByAdcode={pathDByAdcode} getFill={getFill} />
+          {showRivers && projection && <TerrainLayer projection={projection} />}
+          {showChannels && projection && (
+            <ChannelLayer
+              channels={channels}
+              projection={projection}
+              tradeByChannel={tradeByChannel}
+              highlightedId={highlightChannel}
+            />
+          )}
           <AnomalyLayer marks={anomalyMarks} />
+          {showCities && projection && <CityLayer projection={projection} />}
         </g>
 
         {southChinaSea && (
@@ -275,7 +385,7 @@ export function MapContainer() {
         </div>
       )}
 
-      {!isPrice && capacityRes.data && (
+      {indicator === 'capacity' && capacityRes.data && (
         <SummaryCard
           summary={capacityRes.data.summary}
           items={Array.from(capacityRes.data.byAdcode.values())}
@@ -283,10 +393,12 @@ export function MapContainer() {
         />
       )}
       <Legend label={legend.label} segments={legend.segments} />
+      <LayerToggles />
 
       <Tooltip
         capacityByAdcode={capacityRes.data?.byAdcode}
         priceByAdcode={isPrice ? priceRes.data?.byAdcode : undefined}
+        channelTrade={tradeByChannel}
       />
       <DetailPanel
         capacityByAdcode={capacityRes.data?.byAdcode}
