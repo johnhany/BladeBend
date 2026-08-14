@@ -1,0 +1,21 @@
+{
+  "name": "power-map-visualization",
+  "version": "0.1.0",
+  "private": true,
+  "description": "全国电力数据可视化地图 — 前端位于 frontend/，后端为 Python(uv)。",
+  "scripts": {
+    "prepare": "husky",
+    "dev": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "lint": "npm --prefix frontend run lint",
+    "format": "prettier --write \"frontend/src/**/*.{ts,tsx,css,md}\""
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^17.3.0",
+    "prettier": "^3.9.6"
+  },
+  "lint-staged": {
+    "frontend/src/**/*.{ts,tsx,css,md}": "prettier --write"
+  }
+}

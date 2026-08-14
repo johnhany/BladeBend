@@ -1,0 +1,7 @@
+node_modules/
+frontend/dist/
+frontend/node_modules/
+.venv/
+data/
+uv.lock
+package-lock.json

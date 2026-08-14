@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# 环境变量（保留 .env.example 作为模板）
+.env
+.env.production
+.env.local
+!.env.example
+
+# 数据与日志（原始爬取、解析产物、SQLite 均不入库；channels.json 除外）
+data/raw/
+data/processed/
+data/*.db
+data/*.db-journal
+logs/
+*.log
+
+# Node / 前端
+node_modules/
+frontend/dist/
+frontend/.vite/
+dist/
+
+# OS / 编辑器
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

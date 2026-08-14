@@ -1,0 +1,63 @@
+[project]
+name = "power-map-visualization"
+version = "0.1.0"
+description = "全国电力数据可视化地图"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[standard]>=0.111.0",
+    "sqlalchemy>=2.0.0",
+    "alembic>=1.13.0",
+    "pydantic>=2.8.0",
+    "pydantic-settings>=2.3.0",
+    "python-multipart>=0.0.9",
+    "python-dotenv>=1.0.0",
+]
+
+# 可选依赖组：按需安装，避免本地环境被重型依赖拖累。
+#   uv sync                         # 仅基础运行时 + dev（本地开发默认）
+#   uv sync --extra pipeline        # 追加爬虫 / LLM 解析
+#   uv sync --extra ocr             # 追加 PaddleOCR（体积大，按需）
+#   uv sync --extra prod            # 追加 PostgreSQL 驱动
+[project.optional-dependencies]
+prod = [
+    "psycopg2-binary>=2.9.0",
+]
+pipeline = [
+    "requests>=2.32.0",
+    "playwright>=1.45.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=5.2.0",
+    "pandas>=2.2.0",
+    "numpy>=2.0.0",
+    "pillow>=10.4.0",
+    "imagehash>=4.3.0",
+    "tqdm>=4.66.0",
+    "loguru>=0.7.0",
+    "openai>=1.37.0",
+]
+ocr = [
+    "paddleocr>=2.7.0",
+    "paddlepaddle>=2.6.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.5.0",
+    "httpx>=0.27.0",
+]
+
+[tool.uv]
+# 本工程为「应用程序」而非可发布包，uv 无需构建/安装项目本体。
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
