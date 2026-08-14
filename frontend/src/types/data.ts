@@ -30,6 +30,43 @@ export interface CapacityResponse {
   summary: CapacitySummary
 }
 
+/** 电价数据（元/MWh）。 */
+export interface PriceItem {
+  province_code: string
+  province_name: string
+  year: number
+  month: number
+  spot_avg_yuan_mwh: number
+  medium_long_avg_yuan_mwh: number
+  spot_high_yuan_mwh: number
+  spot_low_yuan_mwh: number
+  is_anomaly: boolean
+  anomaly_reason: string | null
+  source_url: string | null
+}
+
+export interface PriceResponse {
+  data: PriceItem[]
+  total: number
+}
+
+export interface PriceHistoryPoint {
+  year: number
+  month: number
+  spot_avg_yuan_mwh: number
+  medium_long_avg_yuan_mwh: number
+  spot_high_yuan_mwh: number
+  spot_low_yuan_mwh: number
+  is_anomaly: boolean
+  anomaly_reason: string | null
+}
+
+export interface PriceHistoryResponse {
+  province_code: string
+  province_name: string
+  data: PriceHistoryPoint[]
+}
+
 /** 电源类型字段键。 */
 export type SourceKey = 'thermal_mw' | 'hydro_mw' | 'wind_mw' | 'pv_mw' | 'nuclear_mw' | 'other_mw'
 

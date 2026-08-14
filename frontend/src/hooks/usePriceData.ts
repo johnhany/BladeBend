@@ -1,38 +1,42 @@
 import { useEffect, useState } from 'react'
-import type { CapacityItem, CapacityResponse, CapacitySummary } from '@/types/data'
+import type { PriceItem, PriceResponse } from '@/types/data'
 import { useDataStore } from '@/stores/dataStore'
 
-export interface CapacityData {
-  /** adcode -> 装机数据，供省份 O(1) 查询。 */
-  byAdcode: Map<string, CapacityItem>
-  summary: CapacitySummary
+export interface PriceData {
+  byAdcode: Map<string, PriceItem>
 }
 
-export function useCapacityData(): {
-  data: CapacityData | null
+/**
+ * 加载某月全部省份电价。activeType 为 null 时不请求（装机指标下不拉电价）。
+ */
+export function usePriceData(activeType: 'spot' | 'medium_long' | null): {
+  data: PriceData | null
   loading: boolean
   error: Error | null
 } {
   const year = useDataStore((s) => s.year)
-  const [data, setData] = useState<CapacityData | null>(null)
+  const month = useDataStore((s) => s.month)
+  const [data, setData] = useState<PriceData | null>(null)
   const [error, setError] = useState<Error | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
+    if (!activeType) {
+      setData(null)
+      return
+    }
     let alive = true
     setLoading(true)
-    // 装机固定取年度汇总（month=0），与电价的月份选择解耦
-    const params = new URLSearchParams({ year: String(year) })
-    fetch(`/api/capacity?${params.toString()}`)
+    fetch(`/api/price?year=${year}&month=${month}&type=${activeType}`)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        return res.json() as Promise<CapacityResponse>
+        return res.json() as Promise<PriceResponse>
       })
       .then((res) => {
         if (!alive) return
-        const byAdcode = new Map<string, CapacityItem>()
+        const byAdcode = new Map<string, PriceItem>()
         for (const it of res.data) byAdcode.set(it.province_code, it)
-        setData({ byAdcode, summary: res.summary })
+        setData({ byAdcode })
         setError(null)
         setLoading(false)
       })
@@ -44,7 +48,7 @@ export function useCapacityData(): {
     return () => {
       alive = false
     }
-  }, [year])
+  }, [activeType, year, month])
 
   return { data, loading, error }
 }

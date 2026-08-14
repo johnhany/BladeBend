@@ -1,21 +1,43 @@
 import { useMapStore } from '@/stores/mapStore'
-import { formatPower } from '@/utils/colorScales'
-import type { CapacityItem } from '@/types/data'
+import { usePriceHistory } from '@/hooks/usePriceHistory'
+import { formatPower, formatPrice } from '@/utils/colorScales'
+import { adcodeOf } from '@/types/geo'
+import type { CapacityItem, PriceItem } from '@/types/data'
 import { ChartPanel } from './ChartPanel'
+import { ComparisonView } from './ComparisonView'
+import { PriceLineChart } from './PriceLineChart'
 
 interface DetailPanelProps {
-  /** 当前选中省份（与选中时间点一致）的装机数据。 */
-  capacity?: CapacityItem
+  capacityByAdcode?: Map<string, CapacityItem>
+  priceByAdcode?: Map<string, PriceItem>
 }
 
-/** 省份详情面板：点击省份后从右侧滑入，展示装机结构与图表。 */
-export function DetailPanel({ capacity }: DetailPanelProps) {
+/**
+ * 省份详情面板：单省模式（装机 + 当月电价 + 12 个月走势折线图）；
+ * Ctrl+点击多选 ≥2 省时切换为并列对比视图（PRD §3.1.2）。
+ */
+export function DetailPanel({ capacityByAdcode, priceByAdcode }: DetailPanelProps) {
   const selected = useMapStore((s) => s.selected)
+  const multiSelected = useMapStore((s) => s.multiSelected)
   const clearSelected = useMapStore((s) => s.clearSelected)
+  const clearMulti = useMapStore((s) => s.clearMulti)
 
-  const open = !!selected
-  const name = selected?.properties?.name
-  const adcode = selected ? String(selected.properties?.adcode ?? '') : ''
+  const compareMode = multiSelected.length >= 2
+  const open = compareMode || !!selected
+  const code = selected ? adcodeOf(selected) : null
+  const {
+    points,
+    loading: histLoading,
+    error: histError,
+  } = usePriceHistory(open && !compareMode ? code : null)
+
+  const capacity = code ? capacityByAdcode?.get(code) : undefined
+  const price = code ? priceByAdcode?.get(code) : undefined
+
+  const handleClose = () => {
+    clearSelected()
+    clearMulti()
+  }
 
   return (
     <aside
@@ -23,14 +45,23 @@ export function DetailPanel({ capacity }: DetailPanelProps) {
         open ? 'translate-x-0' : 'translate-x-full'
       }`}
     >
-      <div className="sticky top-0 flex items-center justify-between border-b border-map-border bg-map-panel/95 px-4 py-3 backdrop-blur">
+      <div className="sticky top-0 z-10 flex items-center justify-between border-b border-map-border bg-map-panel/95 px-4 py-3 backdrop-blur">
         <div>
-          <div className="text-base font-semibold text-white">{open ? name : '未选择省份'}</div>
-          {open && <div className="text-[10px] text-slate-500">编码 {adcode}</div>}
+          <div className="text-base font-semibold text-white">
+            {compareMode
+              ? `多省对比（${multiSelected.length}）`
+              : selected
+                ? (selected.properties?.name as string)
+                : '未选择省份'}
+          </div>
+          {!compareMode && selected && (
+            <div className="text-[10px] text-slate-500">编码 {code}</div>
+          )}
+          {compareMode && <div className="text-[10px] text-slate-500">Ctrl+点击增删省份</div>}
         </div>
         <button
           type="button"
-          onClick={clearSelected}
+          onClick={handleClose}
           className="rounded p-1 text-slate-400 transition-colors hover:bg-map-border hover:text-white"
           aria-label="关闭"
         >
@@ -39,30 +70,82 @@ export function DetailPanel({ capacity }: DetailPanelProps) {
       </div>
 
       <div className="space-y-4 p-4 text-xs text-slate-400">
-        {open && capacity ? (
+        {compareMode ? (
+          <ComparisonView
+            features={multiSelected}
+            capacityByAdcode={capacityByAdcode}
+            priceByAdcode={priceByAdcode}
+          />
+        ) : selected ? (
           <>
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-semibold text-white">
-                {formatPower(capacity.total_mw)}
-              </span>
-              <span className="text-slate-500">
-                总装机 · {capacity.year} 年{capacity.month ? `${capacity.month} 月` : '度汇总'}
-              </span>
-            </div>
+            {capacity && (
+              <>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-2xl font-semibold text-white">
+                    {formatPower(capacity.total_mw)}
+                  </span>
+                  <span className="text-slate-500">总装机 · {capacity.year} 年度汇总</span>
+                </div>
+                <ChartPanel item={capacity} />
+              </>
+            )}
 
-            <ChartPanel item={capacity} />
+            {price && (
+              <section>
+                <h3 className="mb-1.5 font-medium text-slate-300">
+                  当月电价 · {price.year}-{String(price.month).padStart(2, '0')}
+                </h3>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+                  <span className="flex justify-between">
+                    <span className="text-slate-500">现货</span>
+                    <span className="text-slate-200">{formatPrice(price.spot_avg_yuan_mwh)}</span>
+                  </span>
+                  <span className="flex justify-between">
+                    <span className="text-slate-500">中长期</span>
+                    <span className="text-slate-200">
+                      {formatPrice(price.medium_long_avg_yuan_mwh)}
+                    </span>
+                  </span>
+                  <span className="flex justify-between">
+                    <span className="text-slate-500">最高</span>
+                    <span className="text-slate-200">{formatPrice(price.spot_high_yuan_mwh)}</span>
+                  </span>
+                  <span className="flex justify-between">
+                    <span className="text-slate-500">最低</span>
+                    <span className="text-slate-200">{formatPrice(price.spot_low_yuan_mwh)}</span>
+                  </span>
+                </div>
+                {price.is_anomaly && (
+                  <div className="mt-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-400">
+                    ⚠ {price.anomaly_reason}
+                  </div>
+                )}
+              </section>
+            )}
 
             <section>
-              <h3 className="mb-2 font-medium text-slate-300">电价走势</h3>
-              <div className="flex h-28 items-center justify-center rounded border border-dashed border-map-border text-slate-600">
-                时序折线图 · Phase 3
-              </div>
+              <h3 className="mb-1.5 font-medium text-slate-300">电价走势 · 近 12 个月</h3>
+              {histLoading && (
+                <div className="h-40 text-center text-[11px] text-slate-500">加载中…</div>
+              )}
+              {histError && <div className="text-[11px] text-red-400">历史电价加载失败</div>}
+              {points && points.length >= 6 && <PriceLineChart points={points} />}
+              {points && points.length > 0 && points.length < 6 && (
+                <div className="text-[11px] text-slate-500">历史数据不足 6 个月</div>
+              )}
+              {points && points.length === 0 && (
+                <div className="text-[11px] text-slate-500">暂无历史电价数据</div>
+              )}
             </section>
+
+            {!capacity && !price && (
+              <p className="leading-relaxed text-slate-500">该省份在此时间点暂无数据。</p>
+            )}
           </>
-        ) : open ? (
-          <p className="leading-relaxed text-slate-500">该省份在此时间点暂无装机数据。</p>
         ) : (
-          <p className="leading-relaxed text-slate-500">点击地图上的省份查看装机结构详情。</p>
+          <p className="leading-relaxed text-slate-500">
+            点击地图省份查看详情；Ctrl+点击多个省份进入对比模式。
+          </p>
         )}
       </div>
     </aside>

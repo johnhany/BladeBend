@@ -1,13 +1,14 @@
 import { useMapStore } from '@/stores/mapStore'
-import { formatPower } from '@/utils/colorScales'
-import type { CapacityItem } from '@/types/data'
+import { formatPower, formatPrice } from '@/utils/colorScales'
+import type { CapacityItem, PriceItem } from '@/types/data'
 
 interface TooltipProps {
   capacityByAdcode?: Map<string, CapacityItem>
+  priceByAdcode?: Map<string, PriceItem>
 }
 
-/** 悬停提示框：省份名称 + 该省装机摘要（真实数据）。 */
-export function Tooltip({ capacityByAdcode }: TooltipProps) {
+/** 悬停提示框：省份名称 + 当前指标摘要。 */
+export function Tooltip({ capacityByAdcode, priceByAdcode }: TooltipProps) {
   const hovered = useMapStore((s) => s.hovered)
   const mousePos = useMapStore((s) => s.mousePos)
 
@@ -16,6 +17,7 @@ export function Tooltip({ capacityByAdcode }: TooltipProps) {
   const code = String(hovered.properties?.adcode ?? '')
   const name = hovered.properties?.name ?? '未知'
   const cap = capacityByAdcode?.get(code)
+  const pr = priceByAdcode?.get(code)
 
   return (
     <div
@@ -35,21 +37,25 @@ export function Tooltip({ capacityByAdcode }: TooltipProps) {
               <span className="font-medium text-white">{formatPower(cap.total_mw)}</span>
             </div>
             <div className="flex justify-between gap-3 text-slate-400">
-              <span>火电</span>
-              <span>{formatPower(cap.thermal_mw)}</span>
-            </div>
-            <div className="flex justify-between gap-3 text-slate-400">
               <span>风+光</span>
               <span>{formatPower(cap.wind_mw + cap.pv_mw)}</span>
             </div>
-            <div className="flex justify-between gap-3 text-slate-400">
-              <span>水电</span>
-              <span>{formatPower(cap.hydro_mw)}</span>
-            </div>
           </>
-        ) : (
-          <div className="text-slate-500">暂无装机数据</div>
-        )}
+        ) : null}
+        {pr ? (
+          <>
+            <div className="flex justify-between gap-3 text-slate-400">
+              <span>现货均价</span>
+              <span>{formatPrice(pr.spot_avg_yuan_mwh)}</span>
+            </div>
+            <div className="flex justify-between gap-3 text-slate-400">
+              <span>中长期</span>
+              <span>{formatPrice(pr.medium_long_avg_yuan_mwh)}</span>
+            </div>
+            {pr.is_anomaly && <div className="pt-0.5 text-amber-500">⚠ {pr.anomaly_reason}</div>}
+          </>
+        ) : null}
+        {!cap && !pr && <div className="text-slate-500">暂无数据</div>}
       </div>
     </div>
   )

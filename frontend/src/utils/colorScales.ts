@@ -1,4 +1,4 @@
-import { interpolateViridis, scaleSequentialLog } from 'd3'
+import { interpolateViridis, quantile, scaleSequentialLog, scaleThreshold } from 'd3'
 import { SOURCE_META, type SourceKey } from '@/types/data'
 
 /** 无数据省份的填充色（区别于地图背景）。 */
@@ -32,4 +32,31 @@ export function formatRatio(ratio: number): string {
 
 export function sourceColor(key: SourceKey): string {
   return SOURCE_META.find((s) => s.key === key)?.color ?? '#9c9c9c'
+}
+
+// 电价分级设色（参考 SDD §3.2：现货 白-橙-红、中长期 白-蓝-紫，阈值比例尺）
+export const SPOT_PRICE_COLORS = ['#efe9e2', '#f6c2a0', '#f09356', '#dd5a1f', '#8c2d04']
+export const MLT_PRICE_COLORS = ['#eceaf4', '#c3bde0', '#9a8fce', '#6a51a3', '#3d0163']
+
+/**
+ * 按数据分位数计算阈值断点（取整到 10 元），返回阈值比例尺及断点/色带（供图例使用）。
+ */
+export function makePriceThresholdScale(values: number[], kind: 'spot' | 'medium_long') {
+  const colors = kind === 'spot' ? SPOT_PRICE_COLORS : MLT_PRICE_COLORS
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b)
+  let thresholds: number[] = []
+  if (sorted.length >= 5) {
+    thresholds = [0.2, 0.4, 0.6, 0.8]
+      .map((q) => quantile(sorted, q) as number)
+      .map((v) => Math.round(v / 10) * 10)
+      .filter((v, i, arr) => arr.indexOf(v) === i && v > (arr[i - 1] ?? -Infinity))
+  }
+  const range = colors.slice(0, thresholds.length + 1)
+  const scale = scaleThreshold(thresholds, range)
+  return { scale, thresholds, colors: range }
+}
+
+/** 电价格式化。 */
+export function formatPrice(v: number): string {
+  return `${v.toFixed(0)} 元/MWh`
 }

@@ -25,6 +25,8 @@ export const ProvinceLayer = memo(function ProvinceLayer({
   const selected = useMapStore((s) => s.selected)
   const setHovered = useMapStore((s) => s.setHovered)
   const setSelected = useMapStore((s) => s.setSelected)
+  const toggleMulti = useMapStore((s) => s.toggleMulti)
+  const clearMulti = useMapStore((s) => s.clearMulti)
   const setMousePos = useMapStore((s) => s.setMousePos)
 
   const hoveredCode = hovered ? adcodeOf(hovered) : ''
@@ -45,7 +47,7 @@ export const ProvinceLayer = memo(function ProvinceLayer({
             stroke={active ? STROKE_ACTIVE : STROKE_BASE}
             strokeWidth={active ? 1.4 : 0.5}
             filter={isHover ? 'url(#province-glow)' : undefined}
-            style={{ cursor: 'pointer', transition: 'fill 200ms ease, stroke 150ms ease' }}
+            style={{ cursor: 'pointer', transition: 'fill 500ms ease, stroke 150ms ease' }}
             onMouseEnter={() => setHovered(f)}
             onMouseLeave={() => setHovered(null)}
             onMouseMove={(e) => {
@@ -54,7 +56,14 @@ export const ProvinceLayer = memo(function ProvinceLayer({
               ).getBoundingClientRect()
               setMousePos({ x: e.clientX - rect.left, y: e.clientY - rect.top })
             }}
-            onClick={() => setSelected(f)}
+            onClick={(e) => {
+              // Ctrl/Cmd+点击进入多选对比；普通点击单选并退出对比
+              if (e.ctrlKey || e.metaKey) toggleMulti(f)
+              else {
+                setSelected(f)
+                clearMulti()
+              }
+            }}
           />
         )
       })}

@@ -4,5 +4,6 @@
 """
 
 from backend.models.capacity import ProvinceCapacity
+from backend.models.price import ProvincePrice
 
-__all__ = ["ProvinceCapacity"]
+__all__ = ["ProvinceCapacity", "ProvincePrice"]

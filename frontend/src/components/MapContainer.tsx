@@ -2,29 +2,48 @@ import { useCallback, useEffect, useMemo, useRef, type MouseEvent as ReactMouseE
 import { select, zoom, zoomIdentity, type ZoomBehavior } from 'd3'
 import { useChinaGeo } from '@/hooks/useChinaGeo'
 import { useCapacityData } from '@/hooks/useCapacityData'
+import { usePriceData } from '@/hooks/usePriceData'
 import { useMapStore } from '@/stores/mapStore'
-import { AVAILABLE_YEARS, useDataStore } from '@/stores/dataStore'
+import { useDataStore } from '@/stores/dataStore'
 import { adcodeOf, type ProvinceFeature } from '@/types/geo'
 import { createChinaProjection, createGeoPath } from '@/utils/projection'
-import { makeCapacityScale, NO_DATA_COLOR } from '@/utils/colorScales'
+import {
+  formatPower,
+  makeCapacityScale,
+  makePriceThresholdScale,
+  NO_DATA_COLOR,
+} from '@/utils/colorScales'
+import type { Indicator } from '@/types/data'
+import { AnomalyLayer, type AnomalyMark } from './AnomalyLayer'
+import { ControlBar } from './ControlBar'
 import { DetailPanel } from './DetailPanel'
 import { Legend } from './Legend'
 import { ProvinceLayer } from './ProvinceLayer'
 import { SummaryCard } from './SummaryCard'
 import { SouthChinaSeaInset } from './SouthChinaSeaInset'
+import { TimeSelector } from './TimeSelector'
 import { Tooltip } from './Tooltip'
 
 const VIEW_WIDTH = 1000
 const VIEW_HEIGHT = 760
 const NO_PROVINCES: ProvinceFeature[] = []
 
+const INDICATOR_LABEL: Record<Indicator, string> = {
+  capacity: '总装机',
+  spot: '现货均价',
+  medium_long: '中长期均价',
+  trade: '省间交易',
+}
+
 export function MapContainer() {
   const { data: geo, error: geoError, loading: geoLoading } = useChinaGeo()
-  const { data: capacity, loading: capLoading, error: capError } = useCapacityData()
-
+  const indicator = useDataStore((s) => s.indicator)
   const year = useDataStore((s) => s.year)
-  const setYear = useDataStore((s) => s.setYear)
-  const selected = useMapStore((s) => s.selected)
+  const isPrice = indicator === 'spot' || indicator === 'medium_long'
+
+  const capacityRes = useCapacityData()
+  const priceRes = usePriceData(isPrice ? indicator : null)
+
   const setMousePos = useMapStore((s) => s.setMousePos)
   const clearSelected = useMapStore((s) => s.clearSelected)
 
@@ -53,26 +72,98 @@ export function MapContainer() {
     return map
   }, [provinces, pathGen])
 
-  // 装机量 -> 对数色阶
-  const values = useMemo(
-    () => (capacity ? Array.from(capacity.byAdcode.values()).map((i) => i.total_mw) : []),
-    [capacity],
-  )
-  const domain = useMemo<[number, number]>(() => {
-    if (!values.length) return [1, 1000]
-    return [Math.min(...values), Math.max(...values)]
-  }, [values])
-  const scale = useMemo(() => makeCapacityScale(domain), [domain])
+  // 省份质心（异常标注定位）
+  const centroidByAdcode = useMemo(() => {
+    const m: Record<string, [number, number]> = {}
+    if (pathGen)
+      provinces.forEach((f) => {
+        const c = pathGen.centroid(f)
+        if (Number.isFinite(c[0]) && Number.isFinite(c[1])) m[adcodeOf(f)] = [c[0], c[1]]
+      })
+    return m
+  }, [provinces, pathGen])
 
+  // 装机对数色阶
+  const capValues = useMemo(
+    () =>
+      capacityRes.data ? Array.from(capacityRes.data.byAdcode.values()).map((i) => i.total_mw) : [],
+    [capacityRes.data],
+  )
+  const capDomain = useMemo<[number, number]>(() => {
+    if (!capValues.length) return [1, 1000]
+    return [Math.min(...capValues), Math.max(...capValues)]
+  }, [capValues])
+  const capacityScale = useMemo(() => makeCapacityScale(capDomain), [capDomain])
+
+  // 电价阈值色阶（分位数断点）
+  const priceValues = useMemo(() => {
+    if (!isPrice || !priceRes.data) return []
+    return Array.from(priceRes.data.byAdcode.values()).map((i) =>
+      indicator === 'spot' ? i.spot_avg_yuan_mwh : i.medium_long_avg_yuan_mwh,
+    )
+  }, [isPrice, indicator, priceRes.data])
+  const priceScaleInfo = useMemo(
+    () =>
+      makePriceThresholdScale(priceValues, indicator === 'medium_long' ? 'medium_long' : 'spot'),
+    [priceValues, indicator],
+  )
+
+  // 当前指标的填色函数
   const getFill = useCallback(
-    (adcode: string) => {
-      const it = capacity?.byAdcode.get(adcode)
-      return it ? scale(it.total_mw) : NO_DATA_COLOR
+    (code: string) => {
+      if (isPrice) {
+        const it = priceRes.data?.byAdcode.get(code)
+        if (!it) return NO_DATA_COLOR
+        const v = indicator === 'spot' ? it.spot_avg_yuan_mwh : it.medium_long_avg_yuan_mwh
+        return priceScaleInfo.scale(v)
+      }
+      const it = capacityRes.data?.byAdcode.get(code)
+      return it ? capacityScale(it.total_mw) : NO_DATA_COLOR
     },
-    [capacity, scale],
+    [isPrice, indicator, priceRes.data, capacityRes.data, capacityScale, priceScaleInfo],
   )
 
-  const selectedCapacity = selected ? capacity?.byAdcode.get(adcodeOf(selected)) : undefined
+  // 图例分段
+  const legend = useMemo(() => {
+    if (isPrice) {
+      const th = priceScaleInfo.thresholds
+      const colors = priceScaleInfo.colors
+      if (!th.length) {
+        return {
+          label: '电价（元/MWh）',
+          segments: [{ color: colors[0] ?? NO_DATA_COLOR, label: '—' }],
+        }
+      }
+      const segments = colors.map((color, i) => {
+        if (i === 0) return { color, label: `≤${th[0]}` }
+        if (i === th.length) return { color, label: `>${th[th.length - 1]}` }
+        return { color, label: `${th[i - 1]}–${th[i]}` }
+      })
+      return {
+        label: indicator === 'spot' ? '现货均价（元/MWh）' : '中长期均价（元/MWh）',
+        segments,
+      }
+    }
+    const [min, max] = capDomain
+    const ticks = [0, 0.25, 0.5, 0.75, 1].map((t) => min * (max / min) ** t)
+    return {
+      label: '总装机',
+      segments: ticks.map((v) => ({ color: capacityScale(v), label: formatPower(v) })),
+    }
+  }, [isPrice, indicator, priceScaleInfo, capDomain, capacityScale])
+
+  // 电价异常标注（负电价 / 触及限价）
+  const anomalyMarks = useMemo<AnomalyMark[]>(() => {
+    if (!isPrice || !priceRes.data) return []
+    const out: AnomalyMark[] = []
+    for (const it of priceRes.data.byAdcode.values()) {
+      if (!it.is_anomaly) continue
+      const c = centroidByAdcode[it.province_code]
+      if (c)
+        out.push({ code: it.province_code, cx: c[0], cy: c[1], reason: it.anomaly_reason ?? '' })
+    }
+    return out
+  }, [isPrice, priceRes.data, centroidByAdcode])
 
   useEffect(() => {
     const svg = svgRef.current
@@ -109,30 +200,23 @@ export function MapContainer() {
     )
   }
 
+  const loading = geoLoading || capacityRes.loading || (isPrice && priceRes.loading)
+  const dataError = isPrice ? priceRes.error : capacityRes.error
+
   return (
     <div className="relative h-full w-full overflow-hidden bg-map-bg">
       {/* 标题 */}
       <div className="pointer-events-none absolute left-5 top-4 z-10">
         <h1 className="text-lg font-semibold text-white">全国电力数据可视化地图</h1>
-        <p className="text-xs text-slate-400">指标：总装机 · Phase 2</p>
+        <p className="text-xs text-slate-400">指标：{INDICATOR_LABEL[indicator]} · Phase 3</p>
       </div>
 
-      {/* 右上控制：年份 + 重置 */}
+      {/* 指标切换 */}
+      <ControlBar />
+
+      {/* 右上控制：时间 + 重置 */}
       <div className="absolute right-5 top-4 z-10 flex items-center gap-2">
-        <label className="flex items-center gap-1 rounded-md border border-map-border bg-map-panel/80 px-2 py-1 text-xs text-slate-300 backdrop-blur">
-          年份
-          <select
-            value={year}
-            onChange={(e) => setYear(Number(e.target.value))}
-            className="bg-transparent text-slate-200 outline-none"
-          >
-            {AVAILABLE_YEARS.map((y) => (
-              <option key={y} value={y} className="bg-map-panel text-slate-200">
-                {y}
-              </option>
-            ))}
-          </select>
-        </label>
+        <TimeSelector />
         <button
           type="button"
           onClick={handleResetView}
@@ -142,9 +226,9 @@ export function MapContainer() {
         </button>
       </div>
 
-      {capError && (
-        <div className="absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-md border border-red-500/40 bg-red-950/70 px-3 py-1 text-xs text-red-300">
-          装机数据加载失败：{capError.message}
+      {dataError && (
+        <div className="absolute left-1/2 top-14 z-10 -translate-x-1/2 rounded-md border border-red-500/40 bg-red-950/70 px-3 py-1 text-xs text-red-300">
+          数据加载失败：{dataError.message}
         </div>
       )}
 
@@ -177,6 +261,7 @@ export function MapContainer() {
 
         <g ref={zoomGRef}>
           <ProvinceLayer features={provinces} pathDByAdcode={pathDByAdcode} getFill={getFill} />
+          <AnomalyLayer marks={anomalyMarks} />
         </g>
 
         {southChinaSea && (
@@ -184,23 +269,29 @@ export function MapContainer() {
         )}
       </svg>
 
-      {(geoLoading || capLoading) && (
+      {loading && (
         <div className="absolute inset-0 z-20 flex items-center justify-center text-sm text-slate-400">
           正在加载数据…
         </div>
       )}
 
-      {capacity && (
+      {!isPrice && capacityRes.data && (
         <SummaryCard
-          summary={capacity.summary}
-          items={Array.from(capacity.byAdcode.values())}
+          summary={capacityRes.data.summary}
+          items={Array.from(capacityRes.data.byAdcode.values())}
           year={year}
         />
       )}
-      {capacity && <Legend scale={scale} domain={domain} />}
+      <Legend label={legend.label} segments={legend.segments} />
 
-      <Tooltip capacityByAdcode={capacity?.byAdcode} />
-      <DetailPanel capacity={selectedCapacity} />
+      <Tooltip
+        capacityByAdcode={capacityRes.data?.byAdcode}
+        priceByAdcode={isPrice ? priceRes.data?.byAdcode : undefined}
+      />
+      <DetailPanel
+        capacityByAdcode={capacityRes.data?.byAdcode}
+        priceByAdcode={isPrice ? priceRes.data?.byAdcode : undefined}
+      />
     </div>
   )
 }

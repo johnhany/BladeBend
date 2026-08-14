@@ -3,12 +3,14 @@ import type { Indicator } from '@/types/data'
 
 /** 可选年份（mock 数据覆盖 2024/2025）。 */
 export const AVAILABLE_YEARS = [2025, 2024]
+/** 可选月份 1-12（仅电价指标使用；装机为年度汇总）。 */
+export const AVAILABLE_MONTHS = Array.from({ length: 12 }, (_, i) => 12 - i)
 
 interface DataState {
-  /** 当前指标（Phase 2 仅 capacity）。 */
+  /** 当前指标。 */
   indicator: Indicator
   year: number
-  /** 0 = 年度汇总。 */
+  /** 月份 1-12（仅电价指标使用；装机固定取年度汇总 month=0）。 */
   month: number
   setIndicator: (indicator: Indicator) => void
   setYear: (year: number) => void
@@ -18,7 +20,7 @@ interface DataState {
 export const useDataStore = create<DataState>((set) => ({
   indicator: 'capacity',
   year: 2025,
-  month: 0,
+  month: 12,
   setIndicator: (indicator) => set({ indicator }),
   setYear: (year) => set({ year }),
   setMonth: (month) => set({ month }),
