@@ -14,7 +14,7 @@
 | 前端 | React 18 + TypeScript + Vite + D3.js + TopoJSON + ECharts + Zustand + Tailwind CSS |
 | 数据 | 静态 JSON（`frontend/public/data/`），**纯静态站点，无后端服务** |
 | 解析脚本 | Python 3.12（uv 管理）：Markdown → JSON |
-| 部署 | 任意静态托管（Nginx / 对象存储等） |
+| 部署 | 腾讯云 Ubuntu 24.04 + Nginx，域名 **powermap.geekbit.org** |
 
 ## 快速启动
 
@@ -80,3 +80,216 @@ backend/             已弃用：FastAPI mock 服务（不在运行链路）
 ```
 
 > 历史脚本 `seed_mock_*.py` / `export_db_to_static.py` 仅作归档，mock 数据已全部清除。
+
+## 部署（腾讯云 Ubuntu 24.04 · powermap.geekbit.org）
+
+纯静态站点：**在服务器上从 GitHub 拉取代码、本地构建**，产物由 Nginx 直接托管，无后端进程、无数据库、不手动上传文件。
+
+### 0. 前置条件
+
+- 腾讯云服务器（Ubuntu 24.04），安全组已放行 **80/443** 端口
+- 域名 `powermap.geekbit.org` 已在 DNS 解析中添加 A 记录指向服务器公网 IP
+- 服务器可访问 GitHub（clone/pull）与 npm 镜像源
+
+### 1. 服务器环境（一次性）
+
+```bash
+# Node.js 20+（Ubuntu 24.04 自带 node 18 较旧，用 NodeSource 装 20.x）
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+node -v && npm -v            # 确认 v20.x / npm 10+
+
+# 拉取项目
+sudo mkdir -p /opt/powermap && sudo chown ubuntu:ubuntu /opt/powermap
+git clone git@github.com:johnhany/BladeBend.git /opt/powermap
+```
+
+> 项目已包含 `frontend/.npmrc`（镜像源 npmmirror），与 `package-lock.json` 中的下载地址一致，
+> 服务器 `npm install` 不会触发 npm 11 的 `EALLOWREMOTE` 报错（详见下方 FAQ）。
+
+### 2. 构建
+
+```bash
+cd /opt/powermap/frontend
+npm install                 # 或 npm ci
+npm run build               # 产物在 frontend/dist/
+ls dist/ dist/data/         # 校验：index.html、assets/*、data/ 下 7 个 JSON 齐全
+```
+
+### 3. Nginx 安装与站点配置
+
+```bash
+sudo apt update && sudo apt install -y nginx
+sudo tee /etc/nginx/sites-available/powermap > /dev/null <<'EOF'
+server {
+    listen 80;
+    server_name powermap.geekbit.org;
+
+    root /opt/powermap/frontend/dist;
+    index index.html;
+
+    # 静态数据 JSON 不缓存（数据更新后重新 build 即生效）
+    location /data/ {
+        add_header Cache-Control "no-cache";
+    }
+
+    # 带 hash 的构建产物长缓存
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    # SPA 兜底（当前为单页，无前端路由；保留以防后续增加页面）
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+}
+EOF
+sudo ln -s /etc/nginx/sites-available/powermap /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### 4. HTTPS（Let's Encrypt 免费证书）
+
+```bash
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d powermap.geekbit.org
+# 按提示输入邮箱、同意条款；certbot 自动改写 Nginx 配置加 443 与 80→443 跳转
+sudo certbot renew --dry-run   # 验证自动续期
+```
+
+### 5. 验证
+
+```bash
+curl -I https://powermap.geekbit.org                          # 期望 200
+curl -s https://powermap.geekbit.org/data/capacity.json | head -c 120   # 返回 JSON
+```
+
+### 更新发布（代码或数据变更后，在服务器上执行）
+
+```bash
+cd /opt/powermap
+git pull
+cd frontend && npm install && npm run build
+# Nginx root 直接指向 dist/，无需拷贝、无需重启任何服务
+```
+
+### 可选加固
+
+- **HTTP/2**：certbot 配好 443 后，在 `listen 443 ssl;` 后追加 `http2 on;` 再 `sudo systemctl reload nginx`
+- **主机防火墙**：`sudo ufw allow OpenSSH && sudo ufw allow 'Nginx Full' && sudo ufw enable`
+- **定期备份**：站点可随时由仓库重建，服务器无需备份；DNS 与证书配置建议记录在案
+
+### 3. 服务器安装 Nginx
+
+```bash
+ssh ubuntu@<ip>
+sudo apt update && sudo apt install -y nginx
+```
+
+### 4. 站点配置
+
+在服务器上创建 `/etc/nginx/sites-available/powermap`：
+
+```nginx
+server {
+    listen 80;
+    server_name powermap.geekbit.org;
+
+    root /var/www/powermap;
+    index index.html;
+
+    # 静态数据 JSON 不缓存（数据更新后立即生效）
+    location /data/ {
+        add_header Cache-Control "no-cache";
+    }
+
+    # 带 hash 的构建产物长缓存
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    # SPA 兜底（当前为单页，无前端路由；保留以防后续增加页面）
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # 静态数据 JSON 的 MIME 类型（个别浏览器对未知后缀下载而非展示）
+    location ~* \.json$ {
+        types { }
+        default_type application/json;
+    }
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+}
+```
+
+启用站点并重载：
+
+```bash
+sudo ln -s /etc/nginx/sites-available/powermap /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default     # 移除默认站点（可选，避免默认页抢占）
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### 5. HTTPS（Let's Encrypt 免费证书）
+
+```bash
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d powermap.geekbit.org
+# 按提示输入邮箱、同意条款；certbot 自动改写 Nginx 配置加 443 与 80→443 跳转
+```
+
+证书自动续期已由 certbot 的 systemd timer 处理，可验证：
+
+```bash
+sudo certbot renew --dry-run
+```
+
+### 6. 验证
+
+```bash
+curl -I https://powermap.geekbit.org                          # 期望 HTTP 200（或 301 后 200）
+curl -s https://powermap.geekbit.org/data/capacity.json | head -c 120   # 返回 JSON 数据
+```
+
+浏览器访问 https://powermap.geekbit.org ，确认地图加载、各指标切换正常。
+
+### 常见问题（FAQ）
+
+**Q：在服务器上 `npm install` 报 `EALLOWREMOTE: Fetching packages of type "remote" have been disabled`？**
+
+原因：`package-lock.json` 中的依赖下载地址指向 **npmmirror（registry.npmmirror.com）**（本地开发机使用的镜像源），
+而服务器上的 npm（11+）默认只允许从「当前配置的 registry」拉取，其它地址一律拒绝。
+
+处理：项目已包含 `frontend/.npmrc` 与根目录 `.npmrc`（内容为
+`registry=https://registry.npmmirror.com`），`npm install` 会自动读取项目级配置，
+使 registry 与 lockfile 地址一致，不再触发该错误。若仍报错（如 .npmrc 未提交/未拉取），可显式指定：
+
+```bash
+npm install --registry=https://registry.npmmirror.com
+```
+
+> ⚠️ 两份 `.npmrc` 是构建流程的组成部分，**必须随仓库提交**（当前在本地尚未提交，推送前请 `git add .npmrc frontend/.npmrc`）。
+> 若团队统一改用官方源：删除两份 `.npmrc` 后在本地重新生成 lockfile
+> （`rm frontend/package-lock.json && npm install`，需全局 registry 为 npmjs.org）。
+
+**Q：从 GitHub 全新 clone 后构建，数据完整吗？**
+
+完整。`.gitignore` 只忽略「可再生的中间产物」（`node_modules/`、`frontend/dist/`、
+`data/raw/` 原始下载、`data/processed/`、`*.db`、`.env`）；页面所需的全部静态数据
+均已入库并被 `vite build` 原样拷入 `dist/`：
+
+| 构建输入 | git 跟踪 | 说明 |
+|---|---|---|
+| `frontend/public/data/*.json`（7 个） | ✅ | 装机/电价/电量/交易/通道/受送电/河流，`npm run build` 自动拷入 `dist/data/` |
+| `frontend/src/assets/geo/china.topojson` | ✅ | 省界矢量（随 JS 资产打包） |
+| `frontend/src/assets/geo/china-cities.json` | ✅ | 城市点位 |
+| `frontend/package-lock.json` + `.npmrc` | ✅ | 依赖可复现安装 |
+| `data/raw/ne_rivers.geojson` 等原始数据 | ❌（被忽略） | **仅重建 rivers.json 时需要**（`build_rivers.py` 会提示重新下载），常规构建不需要 |
+
+即：`git clone → npm install → npm run build` 三步在任意机器都能得到完整站点；只有重新生成河流数据时才需要补下载 `data/raw/` 下的源文件（脚本内已注明下载地址）。
