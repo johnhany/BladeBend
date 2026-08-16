@@ -99,9 +99,12 @@ curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
 node -v && npm -v            # 确认 v20.x / npm 10+
 
-# 拉取项目
-sudo mkdir -p /opt/powermap && sudo chown ubuntu:ubuntu /opt/powermap
-git clone git@github.com:johnhany/BladeBend.git /opt/powermap
+# 拉取项目（不放 /opt 避免 root 权限问题）
+sudo mkdir -p /home/ubuntu/BladeBend && sudo chown ubuntu:ubuntu /home/ubuntu/BladeBend
+git clone git@github.com:johnhany/BladeBend.git /home/ubuntu/BladeBend
+
+# 关键：nginx 以 www-data 运行，而 /home/ubuntu 通常是 750，www-data 无法进入读取 → 500
+sudo chmod 755 /home/ubuntu   # 只放开目录遍历，不改动其中文件权限
 ```
 
 > 项目已包含 `frontend/.npmrc`（镜像源 npmmirror），与 `package-lock.json` 中的下载地址一致，
@@ -110,7 +113,7 @@ git clone git@github.com:johnhany/BladeBend.git /opt/powermap
 ### 2. 构建
 
 ```bash
-cd /opt/powermap/frontend
+cd /home/ubuntu/BladeBend/frontend
 npm install                 # 或 npm ci
 npm run build               # 产物在 frontend/dist/
 ls dist/ dist/data/         # 校验：index.html、assets/*、data/ 下 7 个 JSON 齐全
@@ -125,7 +128,7 @@ server {
     listen 80;
     server_name powermap.geekbit.org;
 
-    root /opt/powermap/frontend/dist;
+    root /home/ubuntu/BladeBend/frontend/dist;   # 必须绝对路径：nginx 配置中 ~ 不会展开
     index index.html;
 
     # 静态数据 JSON 不缓存（数据更新后重新 build 即生效）
@@ -156,9 +159,9 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ```bash
 sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d powermap.geekbit.org
-# 按提示输入邮箱、同意条款；certbot 自动改写 Nginx 配置加 443 与 80→443 跳转
-sudo certbot renew --dry-run   # 验证自动续期
+sudo certbot --nginx -d powermap.geekbit.org --agree-tos -m <邮箱> --redirect
+sudo systemctl enable --now certbot.timer     # 自动续期
+sudo certbot renew --dry-run                  # 验证续期
 ```
 
 ### 5. 验证
@@ -171,7 +174,7 @@ curl -s https://powermap.geekbit.org/data/capacity.json | head -c 120   # 返回
 ### 更新发布（代码或数据变更后，在服务器上执行）
 
 ```bash
-cd /opt/powermap
+cd /home/ubuntu/BladeBend
 git pull
 cd frontend && npm install && npm run build
 # Nginx root 直接指向 dist/，无需拷贝、无需重启任何服务
@@ -182,82 +185,6 @@ cd frontend && npm install && npm run build
 - **HTTP/2**：certbot 配好 443 后，在 `listen 443 ssl;` 后追加 `http2 on;` 再 `sudo systemctl reload nginx`
 - **主机防火墙**：`sudo ufw allow OpenSSH && sudo ufw allow 'Nginx Full' && sudo ufw enable`
 - **定期备份**：站点可随时由仓库重建，服务器无需备份；DNS 与证书配置建议记录在案
-
-### 3. 服务器安装 Nginx
-
-```bash
-ssh ubuntu@<ip>
-sudo apt update && sudo apt install -y nginx
-```
-
-### 4. 站点配置
-
-在服务器上创建 `/etc/nginx/sites-available/powermap`：
-
-```nginx
-server {
-    listen 80;
-    server_name powermap.geekbit.org;
-
-    root /var/www/powermap;
-    index index.html;
-
-    # 静态数据 JSON 不缓存（数据更新后立即生效）
-    location /data/ {
-        add_header Cache-Control "no-cache";
-    }
-
-    # 带 hash 的构建产物长缓存
-    location /assets/ {
-        add_header Cache-Control "public, max-age=31536000, immutable";
-    }
-
-    # SPA 兜底（当前为单页，无前端路由；保留以防后续增加页面）
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    # 静态数据 JSON 的 MIME 类型（个别浏览器对未知后缀下载而非展示）
-    location ~* \.json$ {
-        types { }
-        default_type application/json;
-    }
-
-    gzip on;
-    gzip_types text/css application/javascript application/json image/svg+xml;
-}
-```
-
-启用站点并重载：
-
-```bash
-sudo ln -s /etc/nginx/sites-available/powermap /etc/nginx/sites-enabled/
-sudo rm -f /etc/nginx/sites-enabled/default     # 移除默认站点（可选，避免默认页抢占）
-sudo nginx -t && sudo systemctl reload nginx
-```
-
-### 5. HTTPS（Let's Encrypt 免费证书）
-
-```bash
-sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d powermap.geekbit.org
-# 按提示输入邮箱、同意条款；certbot 自动改写 Nginx 配置加 443 与 80→443 跳转
-```
-
-证书自动续期已由 certbot 的 systemd timer 处理，可验证：
-
-```bash
-sudo certbot renew --dry-run
-```
-
-### 6. 验证
-
-```bash
-curl -I https://powermap.geekbit.org                          # 期望 HTTP 200（或 301 后 200）
-curl -s https://powermap.geekbit.org/data/capacity.json | head -c 120   # 返回 JSON 数据
-```
-
-浏览器访问 https://powermap.geekbit.org ，确认地图加载、各指标切换正常。
 
 ### 常见问题（FAQ）
 
@@ -277,6 +204,31 @@ npm install --registry=https://registry.npmmirror.com
 > ⚠️ 两份 `.npmrc` 是构建流程的组成部分，**必须随仓库提交**（当前在本地尚未提交，推送前请 `git add .npmrc frontend/.npmrc`）。
 > 若团队统一改用官方源：删除两份 `.npmrc` 后在本地重新生成 lockfile
 > （`rm frontend/package-lock.json && npm install`，需全局 registry 为 npmjs.org）。
+
+**Q：访问站点返回 `500 Internal Server Error`？**
+
+常见原因（都是 Nginx 找不到/读不到 `root` 下的 `index.html`）：
+
+1. **服务器上还没构建**（最易忽略）：`frontend/dist/` 在 `.gitignore` 中，
+   **`git clone` 拉下来的仓库里没有 dist**——必须在服务器上执行 `npm install && npm run build`（部署步骤 2）。
+   若 dist 不存在，`try_files` 兜底到 `/index.html` 也找不到，就会报
+   `rewrite or internal redirection cycle while internally redirecting to "/index.html"` → 500。
+2. **`root` 写了 `~/apps/...`**：Nginx 配置中 **`~` 不会展开**（那是 shell 特性），
+   会被当作字面路径导致找不到文件 → 500。必须写**绝对路径**（本配置用 `/home/ubuntu/BladeBend/frontend/dist`）。
+3. **`root` 指向 `/home/ubuntu/...` 且未放开主目录权限**：nginx 以 `www-data` 用户运行，
+   而 `/home/ubuntu` 通常是 `750`，`www-data` 无法进入读取 → 500/403。
+   修复：`sudo chmod 755 /home/ubuntu`（只放开目录遍历）。
+
+排查方法：
+
+```bash
+sudo tail -20 /var/log/nginx/error.log    # 看具体报错（redirection cycle / permission denied / open() failed）
+sudo nginx -t                              # 校验配置
+ls -la /home/ubuntu/BladeBend/frontend/dist/ # 确认 index.html 存在；不存在 → 回到部署步骤 2 构建
+sudo -u www-data cat /home/ubuntu/BladeBend/frontend/dist/index.html > /dev/null && echo 可读  # 确认 www-data 能读
+```
+
+若已完成 HTTPS，certbot 改写过的配置里同样检查 `root` 是否为绝对路径。
 
 **Q：从 GitHub 全新 clone 后构建，数据完整吗？**
 
