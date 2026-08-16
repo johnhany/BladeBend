@@ -13,6 +13,15 @@ export function makeCapacityScale(domain: [number, number]) {
   return scaleSequentialLog(interpolateViridis).domain([Math.max(lo, 1), hi])
 }
 
+/**
+ * 年度电量（发电量/用电量，GWh）分级设色：对数比例尺 + 可选配色。
+ * 发电量用 plasma（暖）、用电量用 cividis（冷），与装机 viridis 区分。
+ */
+export function makeEnergyScale(domain: [number, number], palette: (t: number) => string) {
+  const [lo, hi] = domain
+  return scaleSequentialLog(palette).domain([Math.max(lo, 1), hi])
+}
+
 /** 功率单位格式化（PRD §2.2：<1000 用 MW，≥1000 用 GW）。 */
 export function formatPower(mw: number): string {
   if (Math.abs(mw) >= 1000) return `${Number((mw / 1000).toFixed(1))} GW`
@@ -23,6 +32,12 @@ export function formatPower(mw: number): string {
 export function formatEnergy(mwh: number): string {
   if (Math.abs(mwh) >= 1_000_000) return `${Number((mwh / 1000).toFixed(1))} GWh`
   return `${Math.round(mwh)} MWh`
+}
+
+/** 以 GWh 为单位的电量格式化（≥1000 用 TWh）。 */
+export function formatEnergyGwh(gwh: number): string {
+  if (Math.abs(gwh) >= 1000) return `${Number((gwh / 1000).toFixed(1))} TWh`
+  return `${Number(gwh.toFixed(1))} GWh`
 }
 
 /** 占比百分比。 */
@@ -39,10 +54,15 @@ export const SPOT_PRICE_COLORS = ['#efe9e2', '#f6c2a0', '#f09356', '#dd5a1f', '#
 export const MLT_PRICE_COLORS = ['#eceaf4', '#c3bde0', '#9a8fce', '#6a51a3', '#3d0163']
 
 /**
- * 按数据分位数计算阈值断点（取整到 10 元），返回阈值比例尺及断点/色带（供图例使用）。
+ * 按数据分位数计算阈值断点（取整到 10），返回阈值比例尺及断点/色带（供图例使用）。
+ * colors 可自定义（如跨区域送出/受入电量配色）。
  */
-export function makePriceThresholdScale(values: number[], kind: 'spot' | 'medium_long') {
-  const colors = kind === 'spot' ? SPOT_PRICE_COLORS : MLT_PRICE_COLORS
+export function makePriceThresholdScale(
+  values: number[],
+  kind: 'spot' | 'medium_long',
+  customColors?: string[],
+) {
+  const colors = customColors ?? (kind === 'spot' ? SPOT_PRICE_COLORS : MLT_PRICE_COLORS)
   const sorted = values.filter(Number.isFinite).sort((a, b) => a - b)
   let thresholds: number[] = []
   if (sorted.length >= 5) {

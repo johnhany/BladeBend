@@ -54,7 +54,7 @@ export function PriceLineChart({ points }: { points: PriceHistoryPoint[] }) {
                 },
                 data: anomalyIdx.map((i) => ({
                   name: `异常${i}`,
-                  coord: [labels[i], points[i].spot_avg_yuan_mwh],
+                  coord: [labels[i], points[i].spot_avg_yuan_mwh ?? 0],
                 })),
               }
             : undefined,

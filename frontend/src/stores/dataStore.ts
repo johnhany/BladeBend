@@ -1,8 +1,8 @@
 import { create } from 'zustand'
 import type { Indicator } from '@/types/data'
 
-/** 可选年份（mock 数据覆盖 2024/2025）。 */
-export const AVAILABLE_YEARS = [2025, 2024]
+/** 可选年份（当前各省数据均为 2025 年度）。 */
+export const AVAILABLE_YEARS = [2025]
 /** 可选月份 1-12（仅电价指标使用；装机为年度汇总）。 */
 export const AVAILABLE_MONTHS = Array.from({ length: 12 }, (_, i) => 12 - i)
 

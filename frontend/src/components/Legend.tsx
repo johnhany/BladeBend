@@ -8,12 +8,16 @@ export interface LegendSegment {
 interface LegendProps {
   label: string
   segments: LegendSegment[]
+  /** 位置覆盖（如第二条图例）。默认 bottom-5 left-5。 */
+  offsetClass?: string
 }
 
 /** 动态图例：分段色带 + 各段标签（装机为连续色阶采样段，电价为阈值分段）。 */
-export function Legend({ label, segments }: LegendProps) {
+export function Legend({ label, segments, offsetClass = 'bottom-5 left-5' }: LegendProps) {
   return (
-    <div className="absolute bottom-5 left-5 z-10 w-72 rounded-md border border-map-border bg-map-panel/85 px-3 py-2 backdrop-blur">
+    <div
+      className={`absolute ${offsetClass} z-10 w-72 rounded-md border border-map-border bg-map-panel/85 px-3 py-2 backdrop-blur`}
+    >
       <div className="mb-1 text-xs font-medium text-slate-300">{label}</div>
       <div className="flex h-3 w-full overflow-hidden rounded border border-black/30">
         {segments.map((s, i) => (

@@ -1,4 +1,5 @@
 import { formatPower, formatRatio } from '@/utils/colorScales'
+import { isMockSource } from '@/utils/dataSource'
 import { SOURCE_META, type CapacityItem, type CapacitySummary } from '@/types/data'
 
 interface SummaryCardProps {
@@ -9,6 +10,7 @@ interface SummaryCardProps {
 
 /** 全国概览卡片：总装机 + 各类电源占比。 */
 export function SummaryCard({ summary, items, year }: SummaryCardProps) {
+  const mockCount = items.filter((i) => isMockSource(i.source_url)).length
   const totals = SOURCE_META.map((s) => ({ ...s, value: 0 }))
   for (const it of items) {
     for (const t of totals) t.value += it[t.key]
@@ -51,6 +53,12 @@ export function SummaryCard({ summary, items, year }: SummaryCardProps) {
         <span>火电 {formatRatio(summary.thermal_ratio)}</span>
         <span>可再生 {formatRatio(summary.renewable_ratio)}</span>
       </div>
+
+      {mockCount > 0 && (
+        <div className="mt-1 text-[9px] text-slate-600">
+          含 {mockCount}/{items.length} 省模拟数据（待真实数据替换）
+        </div>
+      )}
     </div>
   )
 }

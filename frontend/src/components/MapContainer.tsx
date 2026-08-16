@@ -1,27 +1,37 @@
 import { useCallback, useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent } from 'react'
-import { select, zoom, zoomIdentity, type ZoomBehavior } from 'd3'
+import {
+  select,
+  zoom,
+  zoomIdentity,
+  interpolateCividis,
+  interpolatePlasma,
+  type ZoomBehavior,
+} from 'd3'
 import { useChinaGeo } from '@/hooks/useChinaGeo'
 import { useCapacityData } from '@/hooks/useCapacityData'
 import { usePriceData } from '@/hooks/usePriceData'
+import { useEnergyAnnual } from '@/hooks/useEnergyData'
 import { useChannels } from '@/hooks/useChannels'
-import { useTradeData } from '@/hooks/useTradeData'
+import { useFlows } from '@/hooks/useFlows'
 import { useMapStore } from '@/stores/mapStore'
 import { useDataStore } from '@/stores/dataStore'
 import { useUIStore } from '@/stores/uiStore'
 import { adcodeOf, type ProvinceFeature } from '@/types/geo'
 import { createChinaProjection, createGeoPath } from '@/utils/projection'
 import {
+  formatEnergyGwh,
   formatPower,
   makeCapacityScale,
+  makeEnergyScale,
   makePriceThresholdScale,
   NO_DATA_COLOR,
 } from '@/utils/colorScales'
 import type { Indicator } from '@/types/data'
-import { AnomalyLayer, type AnomalyMark } from './AnomalyLayer'
 import { ChannelLayer } from './ChannelLayer'
-import { CityLayer, CITIES } from './CityLayer'
+import { CITIES, CityLayer } from './CityLayer'
 import { ControlBar } from './ControlBar'
 import { DetailPanel } from './DetailPanel'
+import { FlowLayer } from './FlowLayer'
 import { LayerToggles } from './LayerToggles'
 import { Legend } from './Legend'
 import { ProvinceLayer } from './ProvinceLayer'
@@ -38,10 +48,16 @@ const NO_PROVINCES: ProvinceFeature[] = []
 
 const INDICATOR_LABEL: Record<Indicator, string> = {
   capacity: '总装机',
-  spot: '现货均价',
-  medium_long: '中长期均价',
-  trade: '省间交易',
+  generation: '年度发电量',
+  consumption: '年度用电量',
+  spot: '现货年度均价',
+  medium_long: '中长期年度均价',
+  trade: '跨区域受送电',
 }
+
+// 跨区域受送电配色：送出=绿系 / 受入=橙系（深→浅表示电量增大）
+const SENT_COLORS = ['#0e5a31', '#187a44', '#2aa05a', '#57c47f', '#9fe3ba']
+const RECV_COLORS = ['#7c3a10', '#a55a1a', '#cf7c28', '#eda452', '#f8cf94']
 
 export function MapContainer() {
   const { data: geo, error: geoError, loading: geoLoading } = useChinaGeo()
@@ -49,11 +65,14 @@ export function MapContainer() {
   const year = useDataStore((s) => s.year)
   const isPrice = indicator === 'spot' || indicator === 'medium_long'
   const isTrade = indicator === 'trade'
+  const isEnergy = indicator === 'generation' || indicator === 'consumption'
 
   const capacityRes = useCapacityData()
-  const priceRes = usePriceData(isPrice ? indicator : null)
+  // 电价年度聚合常驻加载（悬停弹窗在任意视图都需要年度均价；着色字段由 indicator 决定）
+  const priceRes = usePriceData(indicator === 'medium_long' ? 'medium_long' : 'spot')
+  const energyAnnualRes = useEnergyAnnual()
   const channelsRes = useChannels()
-  const tradeRes = useTradeData(isTrade)
+  const { flows } = useFlows()
 
   const showCities = useUIStore((s) => s.showCities)
   const showChannels = useUIStore((s) => s.showChannels)
@@ -63,6 +82,7 @@ export function MapContainer() {
   const focus = useUIStore((s) => s.focus)
 
   const setMousePos = useMapStore((s) => s.setMousePos)
+  const setZoomScale = useMapStore((s) => s.setZoomScale)
   const clearSelected = useMapStore((s) => s.clearSelected)
 
   const svgRef = useRef<SVGSVGElement>(null)
@@ -72,10 +92,7 @@ export function MapContainer() {
   const provinces = geo?.provinces ?? NO_PROVINCES
   const southChinaSea = geo?.southChinaSea ?? null
   const channels = channelsRes.data ?? []
-  const tradeByChannel = useMemo(
-    () => (tradeRes.data ? tradeRes.data.byChannel : undefined),
-    [tradeRes.data],
-  )
+  const energyAnnual = energyAnnualRes.byAdcode
 
   const projection = useMemo(
     () =>
@@ -95,7 +112,7 @@ export function MapContainer() {
     return map
   }, [provinces, pathGen])
 
-  // 省份质心（异常标注定位）
+  // 省份质心（异常标注 / 受送电连线定位）
   const centroidByAdcode = useMemo(() => {
     const m: Record<string, [number, number]> = {}
     if (pathGen)
@@ -118,12 +135,12 @@ export function MapContainer() {
   }, [capValues])
   const capacityScale = useMemo(() => makeCapacityScale(capDomain), [capDomain])
 
-  // 电价阈值色阶（分位数断点）
+  // 电价年度均价阈值色阶
   const priceValues = useMemo(() => {
     if (!isPrice || !priceRes.data) return []
-    return Array.from(priceRes.data.byAdcode.values()).map((i) =>
-      indicator === 'spot' ? i.spot_avg_yuan_mwh : i.medium_long_avg_yuan_mwh,
-    )
+    return Array.from(priceRes.data.byAdcode.values())
+      .map((p) => (indicator === 'spot' ? p.spot_avg : p.mlt_avg))
+      .filter((v): v is number => v != null)
   }, [isPrice, indicator, priceRes.data])
   const priceScaleInfo = useMemo(
     () =>
@@ -131,59 +148,146 @@ export function MapContainer() {
     [priceValues, indicator],
   )
 
-  // 省填色：装机 viridis / 电价阈值分档 / 省间交易中性底色
+  // 跨区域受送电色阶：送出（绿）/ 受入（橙）
+  const sentValues = useMemo(() => {
+    if (!isTrade || !energyAnnual) return []
+    return Array.from(energyAnnual.values())
+      .map((e) => e.sent_gwh)
+      .filter((v): v is number => v != null)
+  }, [isTrade, energyAnnual])
+  const recvValues = useMemo(() => {
+    if (!isTrade || !energyAnnual) return []
+    return Array.from(energyAnnual.values())
+      .map((e) => e.received_gwh)
+      .filter((v): v is number => v != null)
+  }, [isTrade, energyAnnual])
+  const sentScaleInfo = useMemo(
+    () => makePriceThresholdScale(sentValues, 'spot', SENT_COLORS),
+    [sentValues],
+  )
+  const recvScaleInfo = useMemo(
+    () => makePriceThresholdScale(recvValues, 'spot', RECV_COLORS),
+    [recvValues],
+  )
+
+  // 年度电量（发电/用电）对数色阶
+  const energyValues = useMemo(() => {
+    if (!isEnergy || !energyAnnual) return []
+    return Array.from(energyAnnual.values())
+      .map((e) => (indicator === 'generation' ? e.generation_gwh : e.consumption_gwh))
+      .filter((v): v is number => v != null)
+  }, [isEnergy, indicator, energyAnnual])
+  const energyDomain = useMemo<[number, number]>(() => {
+    if (!energyValues.length) return [100, 1000]
+    return [Math.min(...energyValues), Math.max(...energyValues)]
+  }, [energyValues])
+  const energyScale = useMemo(
+    () =>
+      makeEnergyScale(
+        energyDomain,
+        indicator === 'generation' ? interpolatePlasma : interpolateCividis,
+      ),
+    [energyDomain, indicator],
+  )
+
+  // 省填色：装机 viridis / 电价年度均价分档 / 跨区域送出绿·受入橙
   const getFill = useCallback(
     (code: string) => {
-      if (isTrade) return NO_DATA_COLOR
+      if (isEnergy) {
+        const en = energyAnnual?.get(code)
+        if (!en) return NO_DATA_COLOR
+        const v = indicator === 'generation' ? en.generation_gwh : en.consumption_gwh
+        if (v == null) return NO_DATA_COLOR
+        return energyScale(v)
+      }
+      if (isTrade) {
+        const en = energyAnnual?.get(code)
+        if (!en) return NO_DATA_COLOR
+        if (en.sent_gwh != null) return sentScaleInfo.scale(en.sent_gwh)
+        if (en.received_gwh != null) return recvScaleInfo.scale(en.received_gwh)
+        return NO_DATA_COLOR
+      }
       if (isPrice) {
-        const it = priceRes.data?.byAdcode.get(code)
-        if (!it) return NO_DATA_COLOR
-        const v = indicator === 'spot' ? it.spot_avg_yuan_mwh : it.medium_long_avg_yuan_mwh
+        const p = priceRes.data?.byAdcode.get(code)
+        if (!p) return NO_DATA_COLOR
+        const v = indicator === 'spot' ? p.spot_avg : p.mlt_avg
+        if (v == null) return NO_DATA_COLOR
         return priceScaleInfo.scale(v)
       }
       const it = capacityRes.data?.byAdcode.get(code)
       return it ? capacityScale(it.total_mw) : NO_DATA_COLOR
     },
-    [isTrade, isPrice, indicator, priceRes.data, capacityRes.data, capacityScale, priceScaleInfo],
+    [
+      isEnergy,
+      isTrade,
+      isPrice,
+      indicator,
+      energyAnnual,
+      energyScale,
+      sentScaleInfo,
+      recvScaleInfo,
+      priceRes.data,
+      capacityRes.data,
+      capacityScale,
+      priceScaleInfo,
+    ],
   )
 
-  // 图例分段
+  // 图例
   const legend = useMemo(() => {
-    if (isTrade) {
-      const values = tradeRes.data ? tradeRes.data.list.map((t) => t.avg_price_yuan_mwh) : []
-      const info = makePriceThresholdScale(values, 'spot')
-      const th = info.thresholds
-      const colors = info.colors
-      if (!th.length) {
-        return {
-          label: '通道送电均价（元/MWh）',
-          segments: [{ color: colors[0] ?? NO_DATA_COLOR, label: '—' }],
-        }
+    if (isEnergy) {
+      const [min, max] = energyDomain
+      const ticks = [0, 0.25, 0.5, 0.75, 1].map((t) => min * (max / min) ** t)
+      return {
+        label: indicator === 'generation' ? '年度发电量' : '年度用电量',
+        segments: ticks.map((v) => ({
+          color: energyScale(v),
+          label: formatEnergyGwh(v),
+        })),
+        segments2: null as { color: string; label: string }[] | null,
       }
-      const segments = colors.map((color, i) => {
-        if (i === 0) return { color, label: `≤${th[0]}` }
-        if (i === th.length) return { color, label: `>${th[th.length - 1]}` }
-        return { color, label: `${th[i - 1]}–${th[i]}` }
-      })
-      return { label: '通道送电均价（元/MWh）', segments }
+    }
+    if (isTrade) {
+      const seg = (th: number[], colors: string[]) => {
+        if (!th.length) return colors.map((color) => ({ color, label: '—' }))
+        return colors.map((color, i) => {
+          if (i === 0) return { color, label: `≤${formatEnergyGwh(th[0])}` }
+          if (i === th.length) return { color, label: `>${formatEnergyGwh(th[th.length - 1])}` }
+          return { color, label: `${formatEnergyGwh(th[i - 1])}–${formatEnergyGwh(th[i])}` }
+        })
+      }
+      if (!sentScaleInfo.thresholds.length)
+        return {
+          label: '年度受送电量',
+          segments: [{ color: NO_DATA_COLOR, label: '—' }],
+          segments2: null as { color: string; label: string }[] | null,
+        }
+      return {
+        label: '年度送出电量（绿）',
+        segments: seg(sentScaleInfo.thresholds, sentScaleInfo.colors),
+        segments2: recvScaleInfo.thresholds.length
+          ? seg(recvScaleInfo.thresholds, recvScaleInfo.colors)
+          : null,
+      }
     }
     if (isPrice) {
       const th = priceScaleInfo.thresholds
       const colors = priceScaleInfo.colors
-      if (!th.length) {
+      if (!th.length)
         return {
           label: '电价（元/MWh）',
           segments: [{ color: colors[0] ?? NO_DATA_COLOR, label: '—' }],
+          segments2: null as { color: string; label: string }[] | null,
         }
-      }
       const segments = colors.map((color, i) => {
         if (i === 0) return { color, label: `≤${th[0]}` }
         if (i === th.length) return { color, label: `>${th[th.length - 1]}` }
         return { color, label: `${th[i - 1]}–${th[i]}` }
       })
       return {
-        label: indicator === 'spot' ? '现货均价（元/MWh）' : '中长期均价（元/MWh）',
+        label: indicator === 'spot' ? '现货年度均价（元/MWh）' : '中长期年度均价（元/MWh）',
         segments,
+        segments2: null as { color: string; label: string }[] | null,
       }
     }
     const [min, max] = capDomain
@@ -191,23 +295,22 @@ export function MapContainer() {
     return {
       label: '总装机',
       segments: ticks.map((v) => ({ color: capacityScale(v), label: formatPower(v) })),
+      segments2: null as { color: string; label: string }[] | null,
     }
-  }, [isTrade, isPrice, indicator, priceScaleInfo, capDomain, capacityScale, tradeRes.data])
+  }, [
+    isEnergy,
+    isTrade,
+    isPrice,
+    indicator,
+    energyDomain,
+    energyScale,
+    priceScaleInfo,
+    capDomain,
+    capacityScale,
+    sentScaleInfo,
+    recvScaleInfo,
+  ])
 
-  // 电价异常标注（负电价 / 触及限价）
-  const anomalyMarks = useMemo<AnomalyMark[]>(() => {
-    if (!isPrice || !priceRes.data) return []
-    const out: AnomalyMark[] = []
-    for (const it of priceRes.data.byAdcode.values()) {
-      if (!it.is_anomaly) continue
-      const c = centroidByAdcode[it.province_code]
-      if (c)
-        out.push({ code: it.province_code, cx: c[0], cy: c[1], reason: it.anomaly_reason ?? '' })
-    }
-    return out
-  }, [isPrice, priceRes.data, centroidByAdcode])
-
-  // 缩放平移
   useEffect(() => {
     const svg = svgRef.current
     if (!svg) return
@@ -215,6 +318,7 @@ export function MapContainer() {
       .scaleExtent([1, 8])
       .on('zoom', (event) => {
         zoomGRef.current?.setAttribute('transform', event.transform.toString())
+        setZoomScale(event.transform.k)
       })
     zoomBehaviorRef.current = z
     const selection = select(svg).call(z).on('dblclick.zoom', null)
@@ -223,10 +327,12 @@ export function MapContainer() {
     }
   }, [])
 
-  // 省间交易视图下自动开启通道图层
+  // 切换到跨区域受送电指标时自动开启一次通道图层（此后允许手动关闭，不强制）
   useEffect(() => {
-    if (isTrade && !showChannels) setChannelsVisible(true)
-  }, [isTrade, showChannels, setChannelsVisible])
+    if (isTrade) setChannelsVisible(true)
+    // 故意不依赖 showChannels：避免手动关闭后被立即重开
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTrade])
 
   // 搜索定位：缩放平移至目标（省份 bbox / 通道起止 / 城市点）
   useEffect(() => {
@@ -296,25 +402,20 @@ export function MapContainer() {
   }
 
   const loading =
-    geoLoading ||
-    capacityRes.loading ||
-    (isPrice && priceRes.loading) ||
-    (isTrade && tradeRes.loading)
-  const dataError = isPrice ? priceRes.error : isTrade ? tradeRes.error : capacityRes.error
+    geoLoading || capacityRes.loading || (isPrice && priceRes.loading) || energyAnnualRes.loading
+  const dataError = isPrice ? priceRes.error : capacityRes.error
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-map-bg">
       {/* 标题 */}
       <div className="pointer-events-none absolute left-5 top-4 z-10">
         <h1 className="text-lg font-semibold text-white">全国电力数据可视化地图</h1>
-        <p className="text-xs text-slate-400">指标：{INDICATOR_LABEL[indicator]} · Phase 4</p>
+        <p className="text-xs text-slate-400">指标：{INDICATOR_LABEL[indicator]} · 年度</p>
       </div>
 
-      {/* 指标切换 + 搜索 */}
       <ControlBar />
       <SearchBox provinces={provinces} channels={channels} />
 
-      {/* 右上控制：时间 + 重置 */}
       <div className="absolute right-5 top-4 z-10 flex items-center gap-2">
         <TimeSelector />
         <button
@@ -366,11 +467,10 @@ export function MapContainer() {
             <ChannelLayer
               channels={channels}
               projection={projection}
-              tradeByChannel={tradeByChannel}
               highlightedId={highlightChannel}
             />
           )}
-          <AnomalyLayer marks={anomalyMarks} />
+          {isTrade && <FlowLayer flows={flows} centroidByAdcode={centroidByAdcode} />}
           {showCities && projection && <CityLayer projection={projection} />}
         </g>
 
@@ -393,16 +493,23 @@ export function MapContainer() {
         />
       )}
       <Legend label={legend.label} segments={legend.segments} />
+      {legend.segments2 && (
+        <Legend
+          label="年度受入电量（橙）"
+          segments={legend.segments2}
+          offsetClass="bottom-48 left-5"
+        />
+      )}
       <LayerToggles />
 
       <Tooltip
         capacityByAdcode={capacityRes.data?.byAdcode}
-        priceByAdcode={isPrice ? priceRes.data?.byAdcode : undefined}
-        channelTrade={tradeByChannel}
+        annualPriceByAdcode={priceRes.data?.byAdcode ?? undefined}
+        energyAnnualByAdcode={energyAnnual ?? undefined}
       />
       <DetailPanel
         capacityByAdcode={capacityRes.data?.byAdcode}
-        priceByAdcode={isPrice ? priceRes.data?.byAdcode : undefined}
+        annualPriceByAdcode={priceRes.data?.byAdcode ?? undefined}
       />
     </div>
   )

@@ -12,12 +12,5 @@ export default defineConfig({
   },
   server: {
     port: 8220,
-    // 开发期将 /api/* 请求代理到后端 FastAPI
-    proxy: {
-      '/api': {
-        target: 'http://localhost:8380',
-        changeOrigin: true,
-      },
-    },
   },
 })

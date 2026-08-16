@@ -1,22 +1,26 @@
 import { useMapStore } from '@/stores/mapStore'
 import { usePriceHistory } from '@/hooks/usePriceHistory'
-import { formatPower, formatPrice } from '@/utils/colorScales'
+import { useEnergyData } from '@/hooks/useEnergyData'
+import { formatEnergyGwh, formatPower, formatPrice } from '@/utils/colorScales'
+import { isMockSource } from '@/utils/dataSource'
 import { adcodeOf } from '@/types/geo'
-import type { CapacityItem, PriceItem } from '@/types/data'
+import type { AnnualPrice, CapacityItem } from '@/types/data'
 import { ChartPanel } from './ChartPanel'
 import { ComparisonView } from './ComparisonView'
+import { EnergyCharts } from './EnergyCharts'
 import { PriceLineChart } from './PriceLineChart'
 
 interface DetailPanelProps {
   capacityByAdcode?: Map<string, CapacityItem>
-  priceByAdcode?: Map<string, PriceItem>
+  /** 年度电价聚合（全年已披露月份算术平均）。 */
+  annualPriceByAdcode?: Map<string, AnnualPrice>
 }
 
 /**
- * 省份详情面板：单省模式（装机 + 当月电价 + 12 个月走势折线图）；
+ * 省份详情面板：单省模式（装机 + 年度电价 + 12 个月走势折线图）；
  * Ctrl+点击多选 ≥2 省时切换为并列对比视图（PRD §3.1.2）。
  */
-export function DetailPanel({ capacityByAdcode, priceByAdcode }: DetailPanelProps) {
+export function DetailPanel({ capacityByAdcode, annualPriceByAdcode }: DetailPanelProps) {
   const selected = useMapStore((s) => s.selected)
   const multiSelected = useMapStore((s) => s.multiSelected)
   const clearSelected = useMapStore((s) => s.clearSelected)
@@ -30,9 +34,10 @@ export function DetailPanel({ capacityByAdcode, priceByAdcode }: DetailPanelProp
     loading: histLoading,
     error: histError,
   } = usePriceHistory(open && !compareMode ? code : null)
+  const { data: energy } = useEnergyData(open && !compareMode ? code : null)
 
   const capacity = code ? capacityByAdcode?.get(code) : undefined
-  const price = code ? priceByAdcode?.get(code) : undefined
+  const annualPrice = code ? annualPriceByAdcode?.get(code) : undefined
 
   const handleClose = () => {
     clearSelected()
@@ -74,7 +79,7 @@ export function DetailPanel({ capacityByAdcode, priceByAdcode }: DetailPanelProp
           <ComparisonView
             features={multiSelected}
             capacityByAdcode={capacityByAdcode}
-            priceByAdcode={priceByAdcode}
+            annualPriceByAdcode={annualPriceByAdcode}
           />
         ) : selected ? (
           <>
@@ -86,40 +91,159 @@ export function DetailPanel({ capacityByAdcode, priceByAdcode }: DetailPanelProp
                   </span>
                   <span className="text-slate-500">总装机 · {capacity.year} 年度汇总</span>
                 </div>
+                {isMockSource(capacity.source_url) ? (
+                  <span className="inline-block rounded border border-slate-600/60 bg-slate-700/30 px-1.5 py-0.5 text-[9px] text-slate-400">
+                    模拟数据（开发用，待真实数据替换）
+                  </span>
+                ) : (
+                  capacity.source_url && (
+                    <a
+                      href={capacity.source_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block truncate text-[9px] text-slate-600 transition-colors hover:text-map-accent"
+                      title={capacity.source_url}
+                    >
+                      数据来源：{capacity.source_url}
+                    </a>
+                  )
+                )}
                 <ChartPanel item={capacity} />
               </>
             )}
 
-            {price && (
+            {(energy?.annual || (energy?.months.length ?? 0) > 0) && (
               <section>
                 <h3 className="mb-1.5 font-medium text-slate-300">
-                  当月电价 · {price.year}-{String(price.month).padStart(2, '0')}
+                  电量 · {energy?.annual?.year ?? '—'} 年度
                 </h3>
                 <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+                  {(
+                    [
+                      ['发电量', energy?.annual?.generation_gwh],
+                      ['用电量', energy?.annual?.consumption_gwh],
+                      ['跨省受入', energy?.annual?.received_gwh],
+                      ['跨省送出', energy?.annual?.sent_gwh],
+                    ] as const
+                  ).map(([label, v]) => (
+                    <span key={label} className="flex justify-between">
+                      <span className="text-slate-500">{label}</span>
+                      <span className="text-slate-200">{v != null ? formatEnergyGwh(v) : '—'}</span>
+                    </span>
+                  ))}
+                </div>
+                {energy?.annual?.source_url && (
+                  <a
+                    href={energy.annual.source_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-1 block truncate text-[9px] text-slate-600 transition-colors hover:text-map-accent"
+                    title={energy.annual.source_url}
+                  >
+                    数据来源：{energy.annual.source_url}
+                  </a>
+                )}
+                <EnergyCharts annual={energy?.annual ?? null} months={energy?.months ?? []} />
+
+                {(energy?.annual?.subregions?.length ?? 0) > 0 && (
+                  <div className="mt-2 space-y-1.5">
+                    <h4 className="text-[10px] text-slate-500">电网分区（一区两网）</h4>
+                    {energy?.annual?.subregions?.map((sr) => (
+                      <div
+                        key={sr.name}
+                        className="rounded border border-map-border/60 px-2 py-1.5"
+                      >
+                        <div className="text-xs font-medium text-slate-200">{sr.name}</div>
+                        <div className="mt-0.5 flex gap-3 text-[10px] text-slate-500">
+                          <span>
+                            装机{' '}
+                            <span className="text-slate-300">
+                              {sr.capacity_mw != null ? formatPower(sr.capacity_mw) : '—'}
+                            </span>
+                          </span>
+                          <span>
+                            年发电{' '}
+                            <span className="text-slate-300">
+                              {sr.generation_gwh != null ? formatEnergyGwh(sr.generation_gwh) : '—'}
+                            </span>
+                          </span>
+                        </div>
+                        {sr.prices && sr.prices.length > 0 && (
+                          <div className="mt-1 space-y-0.5">
+                            {sr.prices.map((p) => (
+                              <div key={p.label} className="flex justify-between text-[10px]">
+                                <span className="text-slate-500">{p.label}</span>
+                                <span className="text-slate-300">
+                                  {formatPrice(p.value)}
+                                  {p.volume_gwh != null && (
+                                    <span className="ml-1 text-slate-600">
+                                      {formatEnergyGwh(p.volume_gwh)}
+                                    </span>
+                                  )}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
+
+            {annualPrice && (
+              <section>
+                <h3 className="mb-1.5 font-medium text-slate-300">年度电价</h3>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
                   <span className="flex justify-between">
-                    <span className="text-slate-500">现货</span>
-                    <span className="text-slate-200">{formatPrice(price.spot_avg_yuan_mwh)}</span>
-                  </span>
-                  <span className="flex justify-between">
-                    <span className="text-slate-500">中长期</span>
+                    <span className="text-slate-500">现货均价</span>
                     <span className="text-slate-200">
-                      {formatPrice(price.medium_long_avg_yuan_mwh)}
+                      {annualPrice.spot_avg != null ? formatPrice(annualPrice.spot_avg) : '—'}
+                      {annualPrice.spot_months > 0 && annualPrice.spot_months < 12 && (
+                        <span className="ml-1 text-[9px] text-slate-600">
+                          {annualPrice.spot_months}月均
+                        </span>
+                      )}
                     </span>
                   </span>
                   <span className="flex justify-between">
-                    <span className="text-slate-500">最高</span>
-                    <span className="text-slate-200">{formatPrice(price.spot_high_yuan_mwh)}</span>
-                  </span>
-                  <span className="flex justify-between">
-                    <span className="text-slate-500">最低</span>
-                    <span className="text-slate-200">{formatPrice(price.spot_low_yuan_mwh)}</span>
+                    <span className="text-slate-500">中长期均价</span>
+                    <span className="text-slate-200">
+                      {annualPrice.mlt_avg != null ? formatPrice(annualPrice.mlt_avg) : '—'}
+                      {annualPrice.mlt_months > 0 && annualPrice.mlt_months < 12 && (
+                        <span className="ml-1 text-[9px] text-slate-600">
+                          {annualPrice.mlt_months}月均
+                        </span>
+                      )}
+                    </span>
                   </span>
                 </div>
-                {price.is_anomaly && (
-                  <div className="mt-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-400">
-                    ⚠ {price.anomaly_reason}
-                  </div>
-                )}
+              </section>
+            )}
+
+            {(energy?.annual?.benchmark_price_yuan_mwh != null ||
+              (energy?.annual?.extra_stats?.length ?? 0) > 0) && (
+              <section>
+                <h3 className="mb-1.5 font-medium text-slate-300">
+                  年度指标 · {energy?.annual?.year ?? '—'}
+                </h3>
+                <div className="space-y-0.5 text-[11px]">
+                  {energy?.annual?.benchmark_price_yuan_mwh != null && (
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">燃煤基准价</span>
+                      <span className="text-slate-200">
+                        {formatPrice(energy.annual.benchmark_price_yuan_mwh)}
+                      </span>
+                    </div>
+                  )}
+                  {energy?.annual?.extra_stats?.map((s) => (
+                    <div key={s.label} className="flex justify-between gap-3">
+                      <span className="text-slate-500">{s.label}</span>
+                      <span className="shrink-0 text-slate-200">{s.value}</span>
+                    </div>
+                  ))}
+                </div>
               </section>
             )}
 
@@ -138,8 +262,8 @@ export function DetailPanel({ capacityByAdcode, priceByAdcode }: DetailPanelProp
               )}
             </section>
 
-            {!capacity && !price && (
-              <p className="leading-relaxed text-slate-500">该省份在此时间点暂无数据。</p>
+            {!capacity && !annualPrice && !energy?.annual && (
+              <p className="leading-relaxed text-slate-500">该省份暂无数据。</p>
             )}
           </>
         ) : (

@@ -1832,6 +1832,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
+    { name = "shapely" },
 ]
 ocr = [
     { name = "paddleocr" },
@@ -1879,6 +1880,7 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "requests", marker = "extra == 'pipeline'", specifier = ">=2.32.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5.0" },
+    { name = "shapely", marker = "extra == 'dev'", specifier = ">=2.1.2" },
     { name = "sqlalchemy", specifier = ">=2.0.0" },
     { name = "tqdm", marker = "extra == 'pipeline'", specifier = ">=4.66.0" },
 ]

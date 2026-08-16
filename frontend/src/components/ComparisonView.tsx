@@ -1,13 +1,13 @@
 import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
 import { formatPower, formatPrice } from '@/utils/colorScales'
-import type { CapacityItem, PriceItem } from '@/types/data'
+import type { AnnualPrice, CapacityItem } from '@/types/data'
 import type { ProvinceFeature } from '@/types/geo'
 
 interface ComparisonViewProps {
   features: ProvinceFeature[]
   capacityByAdcode?: Map<string, CapacityItem>
-  priceByAdcode?: Map<string, PriceItem>
+  annualPriceByAdcode?: Map<string, AnnualPrice>
 }
 
 function nameOf(f: ProvinceFeature): string {
@@ -18,13 +18,17 @@ function codeOf(f: ProvinceFeature): string {
 }
 
 /** 多省并列对比视图（Ctrl+点击 ≥2 省时启用，PRD §3.1.2）。 */
-export function ComparisonView({ features, capacityByAdcode, priceByAdcode }: ComparisonViewProps) {
+export function ComparisonView({
+  features,
+  capacityByAdcode,
+  annualPriceByAdcode,
+}: ComparisonViewProps) {
   const rows = features.map((f) => {
     const code = codeOf(f)
     return {
       name: nameOf(f),
       cap: capacityByAdcode?.get(code),
-      price: priceByAdcode?.get(code),
+      price: annualPriceByAdcode?.get(code),
     }
   })
 
@@ -93,20 +97,17 @@ export function ComparisonView({ features, capacityByAdcode, priceByAdcode }: Co
                 <span className="text-slate-300">{r.cap ? formatPower(r.cap.total_mw) : '—'}</span>
               </span>
               <span className="text-slate-500">
-                现货{' '}
+                现货年均{' '}
                 <span className="text-slate-300">
-                  {r.price ? formatPrice(r.price.spot_avg_yuan_mwh) : '—'}
+                  {r.price && r.price.spot_avg != null ? formatPrice(r.price.spot_avg) : '—'}
                 </span>
               </span>
               <span className="text-slate-500">
-                中长期{' '}
+                中长期年均{' '}
                 <span className="text-slate-300">
-                  {r.price ? formatPrice(r.price.medium_long_avg_yuan_mwh) : '—'}
+                  {r.price && r.price.mlt_avg != null ? formatPrice(r.price.mlt_avg) : '—'}
                 </span>
               </span>
-              {r.price?.is_anomaly && (
-                <span className="text-amber-500">⚠ {r.price.anomaly_reason}</span>
-              )}
             </div>
           </div>
         ))}

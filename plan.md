@@ -18,7 +18,7 @@
 | 数据库 | SQLite（本地）/ PostgreSQL（生产，可选 TimescaleDB） |
 | 数据 Pipeline | Python + Playwright + requests + BeautifulSoup + pandas + PaddleOCR + OpenAI/本地 LLM |
 | Python 环境 | **uv**（统一虚拟环境与依赖锁定，Python 3.12） |
-| 部署 | 本地 Win11/macOS 调试；生产 Ubuntu 24.04（腾讯云香港）+ Nginx + systemd + cron |
+| 部署 | 本地 Win11/macOS 调试；生产**纯静态站点**（Nginx / 对象托管，方案调整后无后端） |
 
 ---
 
@@ -37,15 +37,11 @@ uv python pin 3.12
 # 创建虚拟环境（Python 3.12）
 uv venv --python 3.12
 
-# 安装依赖（含分组）
-uv sync                       # 基础 + dev
-uv sync --extra pipeline      # 追加爬虫/LLM 依赖
-uv sync --extra ocr           # 追加 PaddleOCR 依赖
+# 安装依赖（解析脚本仅需基础依赖）
+uv sync
 
-# 运行任意 Python 入口
-uv run python scripts/update_data.py --mode incremental
-uv run uvicorn backend.main:app --reload --port 8380
-uv run pytest
+# 运行解析脚本（Markdown → 静态 JSON）
+uv run python scripts/parse_channels.py
 ```
 
 **依赖分组规划（写入 `pyproject.toml`）：**
@@ -69,7 +65,7 @@ uv run pytest
 | **Phase 2** | 2 周 | 装机数据接入 | 地图按总装机分级设色 + 详情面板堆叠图 |
 | **Phase 3** | 2 周 | 电价数据接入 | 现货/中长期切换 + 时序折线图 + 多选对比 |
 | **Phase 4** | 2 周 | 通道与交易 | 输电通道曲线 + 粒子动画 + 省间交易展示 |
-| **Phase 5** | 1 周 | 数据自动化 | `update_data.py` + LLM/OCR 解析 Pipeline |
+| **Phase 5** | 1 周 | ~~数据自动化~~ → **Markdown 数据接入** | `parse_channels.py` 等 Markdown→静态 JSON 脚本（方案调整：取消爬虫） |
 | **Phase 6** | 1 周 | 优化与部署 | 跨平台测试 + 性能优化 + 腾讯云上线 |
 
 **总工期：约 10.5 周。** 阶段间存在依赖：0 → 1 → 2 → 3 → 4（前端主线）；2 依赖后端；5 可与 3/4 并行启动编码但端到端测试需 4 完成；6 收尾。
@@ -182,26 +178,21 @@ uv run pytest
 
 ---
 
-## 8. Phase 5：数据自动化 Pipeline（Week 9）
+## 8. Phase 5：Markdown 数据接入（Week 9，方案已调整）
 
-**目标：** 用脚本替代手工填库，实现北极星数据的「爬取 → 解析 → 清洗 → 入库」全链路。
+> **方案调整（2026-08-14）**：取消北极星爬虫与数据自动更新，数据改为人工整理的 Markdown → 解析脚本 → 前端静态 JSON。
+> 前端已全面改为加载 `frontend/public/data/*.json`（静态、无后端依赖）。
+
+**目标：** 建立「用户提供 Markdown → 解析脚本 → 静态 JSON → 页面展示」的数据接入模式。
 
 **任务清单：**
-- [ ] `fetcher/index_fetcher.py`：GET `bjx.geekbit.org`，关键词过滤（装机/电价/现货/省间交易/特高压）
-- [ ] `fetcher/article_fetcher.py`：Playwright 抓正文 HTML + 图片，MD5/imagehash 去重，存 `data/raw/`
-- [ ] `parser/text_parser.py`：正则粗提取 + LLM 精校验
-- [ ] `parser/table_parser.py`：pandas DataFrame + LLM 表头映射
-- [ ] `parser/image_parser.py`：PaddleOCR → LLM 结构化（图片表格 / 图表数据点）
-- [ ] `parser/llm_client.py`：封装 OpenAI/本地 LLM，沉淀三类 Prompt 模板（文本/表格/图片）
-- [ ] `processor/normalizer.py`：单位转换（万千瓦×10→MW、GW×1000→MW、亿千瓦时×1e8→MWh、元/千瓦时×1000→元/MWh）；省份名标准化（内蒙古/广西/新疆/宁夏/西藏…）；时间归一 `YYYY-MM`
-- [ ] `processor/validator.py`：电价 >2000 或 <0 元/MWh 标记待审核
-- [ ] `storage/db_writer.py`：写入 SQLite/PostgreSQL
-- [ ] 组装 `update_data.py`：支持 `--mode full|incremental|price|capacity`、`--year --month`
-- [ ] 日志：`logs/update_<ts>.log`、解析失败列表 `logs/failed_articles.json`
+- [x] `scripts/parse_channels.py`：解析 `docs/输电线路.md` → `channels.json`（Gazetteer 地名→经纬度、CHANNEL_IDS 稳定 id、万千瓦/万千伏安→MW、日期规范化）
+- [x] `scripts/provinces/<拼音>.py`：**31 份省份自包含导入脚本**（每省独立、数据固化+来源注释），真实数据导入 `capacity/price/energy.json`；mock 已全部清除（trade 清空）
+- [x] 内蒙古按蒙西/蒙东分区展示（方案B：省级着色 + 详情面板分区卡，通道送端标注蒙西）
 
-**交付物：** `scripts/update_data.py` 及 `scripts/{fetcher,parser,processor,storage}/` 全套。
+**交付物：** `frontend/public/data/{channels,capacity,price,trade}.json` + 对应解析脚本。
 
-**验收标准：** `uv run python scripts/update_data.py --mode incremental` 端到端跑通，至少成功解析并入库若干条装机/电价记录；`failed_articles.json` 正确记录失败项；数据单位与省份编码符合 PRD §2.2 规范；可选验证 `--mode price|capacity` 子模式。
+**验收标准：** 修改 Markdown 后运行解析脚本、刷新页面即生效；通道 id 稳定不破坏交易关联；单位符合 PRD §2.2。
 
 ---
 
@@ -216,9 +207,9 @@ uv run pytest
 - [ ] 响应式：最低兼容 1366×768
 - [ ] 可访问性：键盘 Tab/Enter 导航；色盲友好（避免仅红绿区分，加纹理）
 - [ ] 部署文档 `docs/DEPLOY.md`、API 文档 `docs/API.md`、`README.md` 快速启动
-- [ ] 生产部署：Nginx 反向代理 → FastAPI(:8380)、PostgreSQL(:5432)、systemd 托管后端
-- [ ] cron 定时：每月 5 日 02:00 执行 `uv run python scripts/update_data.py --mode incremental`（生产 venv 改为 uv 环境）
-- [ ] 腾讯云香港服务器部署验证，产出部署验证报告
+- [ ] 生产部署：**纯静态站点**——`npm run build` 产物（含 public/data 静态数据）由 Nginx / 对象存储直接托管（方案调整后无后端进程）
+- [ ] 数据更新：人工编辑 Markdown → 运行解析脚本 → 重新构建/替换 data 目录（无 cron 定时）
+- [ ] 部署验证，产出部署验证报告
 - [ ] Docker：`docker/Dockerfile.backend`、`Dockerfile.frontend`、`docker-compose.yml`（可选）
 
 **交付物：** `docs/DEPLOY.md`、`docker/docker-compose.yml`、`README.md`、生产部署验证报告。
@@ -284,10 +275,6 @@ uv run uvicorn backend.main:app --reload --port 8380
 # 前端
 cd frontend && npm install && npm run dev
 
-# 数据库初始化与更新
-uv run python scripts/init_db.py
-uv run python scripts/update_data.py --mode incremental
-
-# 测试
-uv run pytest
+# 数据解析（Markdown → 静态 JSON）
+uv run python scripts/parse_channels.py
 ```

@@ -1,41 +1,19 @@
-import { AVAILABLE_MONTHS, AVAILABLE_YEARS, useDataStore } from '@/stores/dataStore'
+import { AVAILABLE_YEARS, useDataStore } from '@/stores/dataStore'
 
-const selectCls =
-  'rounded border border-map-border bg-map-panel/80 px-2 py-1 text-xs text-slate-200 backdrop-blur outline-none'
-
-/** 时间选择器：装机按年份（年度汇总）；电价按年份+月份（PRD §3.3.1）。 */
+/**
+ * 时间选择器：仅年份。各指标均按年度口径展示
+ * （装机=年度汇总；电价=全年均价；跨区域受送电=年度总量）。
+ */
 export function TimeSelector() {
-  const indicator = useDataStore((s) => s.indicator)
   const year = useDataStore((s) => s.year)
-  const month = useDataStore((s) => s.month)
   const setYear = useDataStore((s) => s.setYear)
-  const setMonth = useDataStore((s) => s.setMonth)
-
-  const isPrice = indicator !== 'capacity'
 
   return (
     <div className="flex items-center gap-2">
-      {isPrice ? (
-        <label className={selectCls}>
-          月份
-          <select
-            value={month}
-            onChange={(e) => setMonth(Number(e.target.value))}
-            className="ml-1 bg-transparent outline-none"
-          >
-            {AVAILABLE_MONTHS.map((m) => (
-              <option key={m} value={m} className="bg-map-panel text-slate-200">
-                {m} 月
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : (
-        <span className="rounded-md border border-map-border bg-map-panel/80 px-2 py-1 text-xs text-slate-400 backdrop-blur">
-          年度汇总
-        </span>
-      )}
-      <label className={selectCls}>
+      <span className="rounded-md border border-map-border bg-map-panel/80 px-2 py-1 text-xs text-slate-400 backdrop-blur">
+        年度
+      </span>
+      <label className="rounded-md border border-map-border bg-map-panel/80 px-2 py-1 text-xs text-slate-200 backdrop-blur outline-none">
         年份
         <select
           value={year}

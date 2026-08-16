@@ -3,9 +3,11 @@ import type { Indicator } from '@/types/data'
 
 const TABS: { key: Indicator; label: string }[] = [
   { key: 'capacity', label: '装机量' },
+  { key: 'generation', label: '发电量' },
+  { key: 'consumption', label: '用电量' },
   { key: 'spot', label: '现货电价' },
   { key: 'medium_long', label: '中长期电价' },
-  { key: 'trade', label: '省间交易' },
+  { key: 'trade', label: '跨区域受送电' },
 ]
 
 /** 顶部指标切换器（装机 / 现货 / 中长期，PRD §3.3.1）。 */

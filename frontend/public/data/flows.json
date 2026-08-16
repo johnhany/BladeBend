@@ -1,0 +1,31 @@
+{
+  "flows": [
+    {
+      "from_province": "新疆",
+      "from_code": "650000",
+      "to_province": "安徽",
+      "to_code": "340000",
+      "volume_gwh": 69871,
+      "label": "昌吉—古泉±1100kV直流（准皖直流）",
+      "source": "新疆.md §4.1 / 安徽.md §4.1"
+    },
+    {
+      "from_province": "新疆",
+      "from_code": "650000",
+      "to_province": "河南",
+      "to_code": "410000",
+      "volume_gwh": 45924,
+      "label": "哈密南—郑州±800kV直流",
+      "source": "新疆.md §4.1"
+    },
+    {
+      "from_province": "新疆",
+      "from_code": "650000",
+      "to_province": "重庆",
+      "to_code": "500000",
+      "volume_gwh": 11751,
+      "label": "哈密—重庆±800kV直流",
+      "source": "新疆.md §4.1"
+    }
+  ]
+}
